@@ -3,6 +3,7 @@
 // adjustment factor from the adaptation engine applied to current/future weeks.
 import { isoDate, addDays, startOfWeek, parseDate, paceToStr, clamp, round } from './util.js';
 import { refInfo } from './history.js';
+import { getZoneModel, powerRangeStr, paceRangeStr } from './zones.js';
 
 export const PHASES = {
   base:  { label: 'Base',  desc: 'Aerobic foundation, swim technique, sweet-spot strength on the bike.' },
@@ -13,13 +14,16 @@ export const PHASES = {
 };
 
 export function zones(s) {
+  // Power/pace bands come from the athlete's intervals.icu zones (scaled by current FTP / threshold);
+  // Ironman-specific bands are fixed fractions because they are not a standard zone.
   const T = s.runThreshold, F = s.ftp, C = s.css;
+  const m = getZoneModel();
   const w = (lo, hi) => `${Math.round(F * lo)}–${Math.round(F * hi)} W`;
-  const p = (lo, hi) => `${paceToStr(T * hi)}–${paceToStr(T * lo)}/km`;
+  const p = (lo, hi) => `${paceToStr(T * lo)}–${paceToStr(T * hi)}/km`;
   const sw = (lo, hi) => `${paceToStr(C + lo)}–${paceToStr(C + hi)}/100m`;
   return {
-    bike: { z1: w(0.45, 0.55), z2: w(0.56, 0.75), z3: w(0.76, 0.87), ss: w(0.88, 0.94), z4: w(0.95, 1.05), z5: w(1.06, 1.2), im: w(0.70, 0.76), imW: Math.round(F * 0.73) },
-    run: { easy: p(1.18, 1.32), steady: p(1.08, 1.14), im: p(1.13, 1.18), thr: p(0.98, 1.02), vo2: p(0.91, 0.95), imPace: Math.round(T * 1.155), easyPace: Math.round(T * 1.25) },
+    bike: { z1: powerRangeStr(F, 1), z2: powerRangeStr(F, 2), z3: powerRangeStr(F, 3), ss: w(m.bike.ss[0] / 100, m.bike.ss[1] / 100), z4: powerRangeStr(F, 4), z5: powerRangeStr(F, 5), im: w(0.70, 0.76), imW: Math.round(F * 0.73) },
+    run: { easy: paceRangeStr('run', T, 2), steady: paceRangeStr('run', T, 3), im: p(1.13, 1.18), thr: paceRangeStr('run', T, 4), vo2: paceRangeStr('run', T, 5), imPace: Math.round(T * 1.155), easyPace: Math.round(T * 1.25) },
     swim: { easy: sw(6, 12), css: sw(-1, 2), im: sw(3, 7), fast: sw(-6, -2), imPace: C + 5 },
   };
 }

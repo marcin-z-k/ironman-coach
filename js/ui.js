@@ -3,6 +3,9 @@ import { PHASES, zones } from './plan.js';
 import { load, save, DEFAULTS } from './store.js';
 import { summarise, getSummary, ruleSummary } from './analysis.js';
 import { describeProfile } from './history.js';
+import { renderWidgets } from './health.js';
+import { hrRangeStr, collapse, plannedDist, getZoneModel } from './zones.js';
+import { estimateAll, estimateTrend } from './thresholds.js';
 
 const h = (html) => el(html);
 
@@ -20,6 +23,15 @@ export function renderToday(A, ui) {
     <div><div class="small muted">${esc(s.raceName)}</div><div style="font-weight:800;font-size:22px;letter-spacing:-.02em">${daysLeft} days to go</div></div>
     ${week ? `<span class="pill accent">${PHASES[week.phase].label}${week.recovery ? ' · recovery' : ''} · wk ${week.index + 1}/${A.plan.totalWeeks + 1}</span>` : ''}
   </div>`));
+
+  root.append(renderWidgets(ui.data, ui));
+  if (ui.pending?.length) {
+    const lbl = { ftp: 'FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
+    const f = (k, v) => k === 'ftp' ? v + ' W' : paceToStr(v) + (k === 'css' ? '/100m' : '/km');
+    const b = h(`<div class="adjust-banner good"><span>↗</span><div style="flex:1"><strong>New threshold estimate from your activities.</strong> ${ui.pending.map(u => `${lbl[u.field]} ${f(u.field, u.from)} → <b>${f(u.field, u.to)}</b>`).join(' · ')}<div style="margin-top:8px"><button class="btn small">Apply</button></div></div></div>`);
+    b.querySelector('button').onclick = () => ui.applyPending();
+    root.append(b);
+  }
 
   // week strip
   const strip = h('<div class="weekstrip"></div>');
@@ -51,20 +63,8 @@ export function renderToday(A, ui) {
     sessions.forEach((x, i) => root.append(sessionHero(x, A.matches[x.id], i === 0 ? label : null, A)));
   }
 
-  // readiness
-  const w = A.wellness;
-  if (w.ctl != null) {
-    const tsbCls = w.tsb > 5 ? 'good' : w.tsb > -20 ? '' : w.tsb > -30 ? 'warn' : 'bad';
-    root.append(h(`<div class="card"><div class="card-title">Readiness · ${w.date ? fmtDate(w.date) : ''}</div>
-      <div class="readiness-grid">
-        <div class="gauge"><div class="v">${round(w.ctl)}</div><div class="k">Fitness</div><div class="d faint">CTL</div></div>
-        <div class="gauge"><div class="v">${round(w.atl)}</div><div class="k">Fatigue</div><div class="d faint">ATL</div></div>
-        <div class="gauge"><div class="v ${tsbCls ? 'sport-' + (tsbCls === 'good' ? 'run' : tsbCls === 'bad' ? 'brick' : 'bike') : ''}">${w.tsb > 0 ? '+' : ''}${w.tsb}</div><div class="k">Form</div><div class="d faint">TSB</div></div>
-      </div>
-      ${(w.hrv || w.rhr || w.sleepH) ? `<div class="row small muted" style="margin-top:10px;gap:14px;flex-wrap:wrap">${w.hrv ? `<span>HRV <b>${round(w.hrv)}</b></span>` : ''}${w.rhr ? `<span>Rest HR <b>${round(w.rhr)}</b></span>` : ''}${w.sleepH ? `<span>Sleep <b>${w.sleepH} h</b></span>` : ''}${w.ramp != null ? `<span>Ramp <b>${round(w.ramp, 1)}</b>/wk</span>` : ''}</div>` : ''}
-      ${A.flags.length ? `<div class="stack small" style="margin-top:12px">${A.flags.map(f => `<div class="row" style="align-items:flex-start;gap:8px"><span class="dot" style="margin-top:5px;background:var(--${f.level === 'bad' ? 'bad' : f.level === 'good' ? 'good' : 'warn'})"></span><span class="muted">${esc(f.text)}</span></div>`).join('')}</div>` : '<div class="small muted" style="margin-top:10px">No warning signs. Train as planned.</div>'}
-    </div>`));
-  }
+  // coach notes (readiness flags)
+  if (A.flags.length) root.append(h(`<div class="card"><div class="card-title">Coach notes</div><div class="stack small">${A.flags.map(f => `<div class="row" style="align-items:flex-start;gap:8px"><span class="dot" style="margin-top:5px;background:var(--${f.level === 'bad' ? 'bad' : f.level === 'good' ? 'good' : 'warn'})"></span><span class="muted">${esc(f.text)}</span></div>`).join('')}</div></div>`));
 
   // week progress
   if (week) {
@@ -117,7 +117,7 @@ function sessionHero(x, done, label, A) {
       <div class="metric"><div class="v">${Math.round(x.if * 100)}%</div><div class="k">Intensity</div></div>
     </div>
     ${refBlock(x)}
-    <div class="steps">${x.steps.map(st => `<div class="step"><span class="bar z${st.zone}"></span><span>${esc(st.text)}${st.rest ? ` <span class="faint">· ${st.rest} min easy</span>` : ''}</span><span class="t">${Math.round(st.min)} min</span></div>`).join('')}</div>
+    <div class="steps">${x.steps.map(st => { const hr = x.sport !== 'swim' ? hrRangeStr(x.sport === 'brick' ? 'run' : x.sport, st.zone) : null; return `<div class="step"><span class="bar z${st.zone}"></span><span>${esc(st.text)}${st.rest ? ` <span class="faint">· ${st.rest} min easy</span>` : ''}${hr ? `<span class="hrchip">♥ Z${st.zone} ${hr}</span>` : ''}</span><span class="t">${Math.round(st.min)} min</span></div>`; }).join('')}</div>
     ${x.note ? `<p class="small muted" style="margin-top:12px">${esc(x.note)}</p>` : ''}
   </div>`);
   return card;
@@ -204,7 +204,7 @@ export function renderActivities(A, ui, data) {
   if (all.length > acts.length) { const more = h(`<button class="btn secondary">Show more (${all.length - acts.length})</button>`); more.onclick = () => { ui.actLimit += 25; ui.rerender(); }; root.append(more); }
   return root;
 }
-function summaryBadge(sm) { if (!sm) return '<span class="pill">…</span>'; const m = { on: ['good', 'On target'], above: ['warn', 'Too hard'], below: ['bad', 'Under'] }[sm.verdict] || ['', '']; return `<span class="pill ${m[0]}">${m[1]}</span>`; }
+function summaryBadge(sm) { if (!sm) return '<span class="pill">…</span>'; const m = { on: ['good', 'On target'], above: ['warn', 'Too hard'], below: ['bad', 'Under'], none: ['', 'No plan'] }[sm.verdict] || ['', '']; return `<span class="pill ${m[0]}">${m[1]}</span>`; }
 function actDetail(a, planned) {
   const cells = [];
   if (a.avgHr) cells.push(['Avg HR', Math.round(a.avgHr)]);
@@ -218,12 +218,30 @@ function actDetail(a, planned) {
   if (a.eftp) cells.push(['eFTP', a.eftp + ' W']);
   if (a.decoupling != null) cells.push(['Drift', round(a.decoupling, 1) + '%']);
   return `<div class="act-stats">${cells.slice(0, 8).map(c => `<div class="metric"><div class="v">${c[1]}</div><div class="k">${c[0]}</div></div>`).join('')}</div>
+    ${zoneBars(a, planned)}
     ${planned ? `<div class="small muted" style="margin-top:10px">Planned: <b>${esc(planned.title)}</b> · ${fmtDur(planned.min)} · ${Math.round(planned.if * 100)}% · load ${planned.tss}</div>` : ''}
     <div class="summary"></div>
     <div class="row between" style="margin-top:8px"><button class="btn ghost small" data-redo>↻ Re-analyse</button><a class="small" href="https://intervals.icu/activities/${esc(a.id)}" target="_blank" rel="noopener">Open in intervals.icu ↗</a></div>`;
 }
+const ZCOL = ['#5d6678', '#4cc3ff', '#58e39a', '#ffb020', '#ff7a45', '#ff5c6c', '#c44cff'];
+function zoneBar(label, secs) {
+  if (!secs || !secs.some(Boolean)) return '';
+  const tot = secs.reduce((a, b) => a + (b || 0), 0);
+  const segs = secs.map((v, i) => v ? `<span style="flex:${v};background:${ZCOL[Math.min(i, 6)]}" title="Z${i + 1}: ${Math.round(v / 60)} min"></span>` : '').join('');
+  const top = secs.map((v, i) => [v, i]).filter(x => x[0] / tot >= 0.08).map(([v, i]) => `Z${i + 1} ${Math.round(v / tot * 100)}%`).join(' · ');
+  return `<div class="zrow"><div class="zl">${label}</div><div class="zbar">${segs}</div><div class="zt">${top}</div></div>`;
+}
+function zoneBars(a, planned) {
+  const rows = [];
+  if (a.powerZoneSecs) rows.push(zoneBar('Power', a.powerZoneSecs));
+  if (a.paceZoneSecs && a.sport !== 'bike') rows.push(zoneBar(a.sport === 'swim' ? 'Pace' : 'Pace (GAP)', a.paceZoneSecs));
+  if (a.hrZoneSecs) rows.push(zoneBar('Heart rate', a.hrZoneSecs));
+  if (planned) { const pd = plannedDist(planned.steps); if (pd) rows.push(zoneBar('Planned', pd.secs)); }
+  const out = rows.filter(Boolean);
+  return out.length ? `<div class="zones">${out.join('')}</div>` : '';
+}
 function fillSummary(box, r) {
-  const m = { on: ['good', 'On target'], above: ['warn', 'Harder than intended'], below: ['bad', 'Under-delivered'] }[r.verdict] || ['', 'Summary'];
+  const m = { on: ['good', 'On target'], above: ['warn', 'Harder than intended'], below: ['bad', 'Under-delivered'], none: ['', 'Not in the plan'] }[r.verdict] || ['', 'Summary'];
   box.innerHTML = `<div class="verdict"><span class="dot" style="background:var(--${m[0] || 'muted'})"></span>${m[1]}</div><div>${esc(r.text)}</div><div class="adjust"><b>Change anything?</b> ${esc(r.adjust)}</div><div class="src">${r.source === 'ai' ? 'AI coach' : 'Rule-based'}${r.error ? ' · AI failed: ' + esc(r.error) : ''}</div>`;
 }
 
@@ -249,16 +267,45 @@ export function renderProgress(A, ui, data) {
     ${g.rows.map(r => { const fmt = v => r.unit === 'w' ? v + ' W' : r.unit === 'pace' ? paceToStr(v) + '/km' : paceToStr(v) + '/100m'; return `<div class="goal-row"><div class="lbl sport-${r.key}">${r.label}<small>${r.key === 'bike' && g.eftpNow ? 'latest eFTP' : 'current'}</small></div><div class="track"><span style="width:${Math.round(r.progress * 100)}%;background:var(--${r.key})"></span></div><div class="val">${fmt(r.cur)}<small>target ${fmt(r.target)}</small></div></div>`; }).join('')}
   </div>`));
 
+  root.append(thresholdCard(data, ui));
   // fitness chart
-  const well = (data?.wellness || []).filter(w => w.ctl != null);
+  const well = (data?.wellness || []).filter(w => w.ctl != null).slice(-120);
   if (well.length > 5) root.append(fitnessChart(well));
   // weekly volume planned vs actual (last 8 weeks + next 4)
   root.append(volumeChart(A, data));
   return root;
 }
 
+function thresholdCard(data, ui) {
+  const s = load();
+  const acts = data?.activities || [];
+  const todayIso = isoDate(new Date());
+  const est = estimateAll(acts, s, todayIso);
+  const trend = estimateTrend(acts, s, todayIso, 12);
+  const lbl = { ftp: ['Bike FTP', 'bike'], runThreshold: ['Run threshold', 'run'], css: ['Swim CSS', 'swim'] };
+  const fmt = (k, v) => v == null ? '–' : k === 'ftp' ? `${v} W` : `${paceToStr(v)}${k === 'css' ? '/100m' : '/km'}`;
+  const sp = (k) => {
+    const pts = trend[k].filter(p => p.value != null); if (pts.length < 2) return '';
+    const vs = pts.map(p => p.value), mn = Math.min(...vs), mx = Math.max(...vs), r = mx - mn || 1, inv = k !== 'ftp';
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${(i / (pts.length - 1) * 100).toFixed(1)},${(inv ? 3 + (p.value - mn) / r * 22 : 25 - (p.value - mn) / r * 22).toFixed(1)}`).join(' ');
+    return `<svg viewBox="0 0 100 28" class="spark" preserveAspectRatio="none" style="height:28px"><path d="${d}" fill="none" stroke="var(--${lbl[k][1]})" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+  };
+  const conf = { high: 'good', medium: '', low: 'warn', none: '' };
+  const rows = Object.keys(lbl).map(k => {
+    const e = est[k];
+    return `<div class="th-row"><div class="row between"><div><div class="lbl sport-${lbl[k][1]}" style="font-weight:700">${lbl[k][0]}</div><div class="small muted">in use <b style="color:var(--text)">${fmt(k, s[k])}</b> · estimate <b style="color:var(--text)">${fmt(k, e.value)}</b></div></div><span class="pill ${conf[e.confidence]}">${e.confidence === 'none' ? 'no data' : e.confidence + ' confidence'}</span></div>
+      ${sp(k)}
+      ${e.hint ? `<div class="small" style="color:var(--warn)">${esc(e.hint)}</div>` : ''}
+      ${e.methods.length ? `<div class="small faint">${e.methods.map(m => `${esc(m.label)}: ${fmt(k, m.value)} <span class="faint">(${esc(m.detail)})</span>`).join(' · ')}</div>` : '<div class="small faint">Not enough suitable activities in the last 6 weeks.</div>'}</div>`;
+  }).join('');
+  const log = (s.thresholdLog || []).slice(0, 6);
+  return h(`<div class="card"><div class="card-title">Thresholds · estimated from your activities</div>${rows}
+    ${log.length ? `<details class="more" style="margin-top:10px"><summary>Change history (${(s.thresholdLog || []).length})</summary><div class="stack small muted">${log.map(l => `<div>${fmtDate(l.date)} · ${lbl[l.field][0]} ${fmt(l.field, l.from)} → <b style="color:var(--text)">${fmt(l.field, l.to)}</b> <span class="faint">(${esc(l.source)})</span></div>`).join('')}</div></details>` : ''}
+    <div class="small faint" style="margin-top:8px">12-week trend of the estimate. Mode: ${esc({ auto: 'automatic', suggest: 'suggest & confirm', intervals: 'intervals.icu settings', manual: 'manual' }[s.thresholdSource || 'auto'])} (change in Settings).</div></div>`);
+}
+
 function fitnessChart(well) {
-  const W = 700, H = 220, pad = { l: 34, r: 10, t: 14, b: 26 };
+  const W = 460, H = 200, pad = { l: 34, r: 10, t: 14, b: 26 };
   const xs = well.map((_, i) => pad.l + i / (well.length - 1) * (W - pad.l - pad.r));
   const maxY = Math.max(...well.map(w => Math.max(w.ctl, w.atl))) * 1.1 || 10;
   const minY = Math.min(0, ...well.map(w => w.ctl - w.atl)) * 1.1;
@@ -307,7 +354,13 @@ export function renderSettings(ui, onSave) {
         <div class="field"><label>API key</label><input name="apiKey" type="password" value="${esc(s.apiKey)}" placeholder="from Settings → Developer" autocomplete="off"></div>
       </div>
       <div class="field"><div class="hint">Keys are stored only in this browser (localStorage) and sent only to intervals.icu. Find both under intervals.icu → Settings → Developer Settings.</div></div>
-      <div class="field"><label><input type="checkbox" name="autoThresholds" ${s.autoThresholds ? 'checked' : ''} style="width:auto;margin-right:8px">Update FTP / paces automatically from my intervals.icu sport settings</label></div>
+      <div class="field"><label>How thresholds are updated</label><select name="thresholdSource">
+        <option value="auto" ${s.thresholdSource === 'auto' ? 'selected' : ''}>Automatically from my activities (recommended)</option>
+        <option value="suggest" ${s.thresholdSource === 'suggest' ? 'selected' : ''}>Suggest from my activities, I confirm</option>
+        <option value="intervals" ${s.thresholdSource === 'intervals' ? 'selected' : ''}>Always use my intervals.icu sport settings</option>
+        <option value="manual" ${s.thresholdSource === 'manual' ? 'selected' : ''}>Manual only</option></select>
+        <div class="hint">Estimates use intervals.icu eFTP, power-model FTP, power and pace at your LTHR, hard efforts and races. Max ±5% per update. A new value you set in intervals.icu (e.g. after a test) is always taken over.</div></div>
+      <div class="field"><div class="hint">${zoneInfo()}</div></div>
       <div class="field"><label><input type="checkbox" name="planFromHistory" ${s.planFromHistory !== false ? 'checked' : ''} style="width:auto;margin-right:8px">Build the plan from my last 8 weeks (my days, sports and durations)</label><div class="hint">Off = standard template using "Current weekly hours" below.</div></div>
 
       <div class="card-title" style="margin-top:8px">Race & goal</div>
@@ -353,7 +406,7 @@ export function renderSettings(ui, onSave) {
       athleteId: fd.get('athleteId').trim(), apiKey: fd.get('apiKey').trim(), anthropicKey: fd.get('anthropicKey').trim(), anthropicModel: fd.get('anthropicModel').trim() || DEFAULTS.anthropicModel,
       corsProxy: fd.get('corsProxy').trim(), raceName: fd.get('raceName').trim() || 'Ironman', raceDate: fd.get('raceDate'), goalHours: +fd.get('goalHours') || 12, weeklyHours: +fd.get('weeklyHours') || 9.5,
       ftp: +fd.get('ftp') || 180, weightKg: +fd.get('weightKg') || 75, runThreshold: strToPace(fd.get('runThreshold')) || 340, css: strToPace(fd.get('css')) || 110,
-      longBikeDay: +fd.get('longBikeDay'), longRunDay: +fd.get('longRunDay'), autoThresholds: fd.get('autoThresholds') === 'on', planFromHistory: fd.get('planFromHistory') === 'on', demo: fd.get('demo') === 'on',
+      longBikeDay: +fd.get('longBikeDay'), longRunDay: +fd.get('longRunDay'), thresholdSource: fd.get('thresholdSource'), planFromHistory: fd.get('planFromHistory') === 'on', demo: fd.get('demo') === 'on',
       planStart: fd.get('planStart') || s.planStart || isoDate(new Date()),
     };
     if (patch.athleteId && /^\d+$/.test(patch.athleteId)) patch.athleteId = 'i' + patch.athleteId;
@@ -362,6 +415,12 @@ export function renderSettings(ui, onSave) {
   };
   root.querySelector('#btnReset').onclick = () => { if (ui.confirm('Clear all local data including keys and cached summaries?')) { ui.reset(); } };
   return root;
+}
+
+function zoneInfo() {
+  const m = getZoneModel();
+  const part = (sp, name) => { const z = m[sp]; return `${name}: ${z.source === 'intervals' ? 'your intervals.icu zones' : 'default zones'}${z.lthr ? `, LTHR ${z.lthr}` : ''}${z.maxHr ? `, max HR ${z.maxHr}` : ''}${z.hr ? '' : ', no HR zones'}${z.hrBorrowed ? ` (HR zones from ${z.hrBorrowed})` : ''}`; };
+  return `Zones in use — ${part('bike', 'Bike')} · ${part('run', 'Run')}. Workout targets and activity analysis use these.`;
 }
 
 export function renderSetup(onDemo) {

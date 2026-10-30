@@ -25,16 +25,17 @@ async function get(path, params = {}) {
   return res.json();
 }
 
-export async function fetchAll({ days = 120 } = {}) {
+export async function fetchAll({ days = 150, wellnessDays = 200 } = {}) {
   const s = load();
   const today = new Date();
   const oldest = isoDate(addDays(today, -days));
+  const wOldest = isoDate(addDays(today, -wellnessDays));
   const newest = isoDate(addDays(today, 1));
 
   if (s.demo) {
     const data = { athlete: demoAthlete(),
       activities: demoActivities(days).map(normalizeActivity).filter(Boolean).sort((a, b) => b.start.localeCompare(a.start)),
-      wellness: demoWellness(days).map(normalizeWellness), fetchedAt: Date.now(), demo: true };
+      wellness: demoWellness(wellnessDays).map(normalizeWellness), fetchedAt: Date.now(), demo: true };
     setCache('data', data);
     return data;
   }
@@ -42,7 +43,7 @@ export async function fetchAll({ days = 120 } = {}) {
   const [athlete, activities, wellness] = await Promise.all([
     get('', {}).catch(() => null),
     get('/activities', { oldest, newest }),
-    get('/wellness', { oldest, newest }).catch(() => []),
+    get('/wellness', { oldest: wOldest, newest }).catch(() => []),
   ]);
   const data = {
     athlete,
@@ -92,6 +93,16 @@ export function normalizeActivity(a) {
     ftp: a.icu_ftp ?? null,
     eftp: (a.icu_eftp ?? a.eftp) != null ? Math.round(a.icu_eftp ?? a.eftp) : null,
     decoupling: a.decoupling ?? null,
+    pmFtp: a.icu_pm_ftp_watts ?? a.icu_pm_ftp ?? null,           // FTP from this activity's power model
+    race: !!a.race,
+    trainer: !!a.trainer,
+    vi: a.icu_variability_index ?? null,
+    gapSecKm: a.gap ? a.gap * 1000 : null,                        // gap is sec/m
+    hrZoneSecs: Array.isArray(a.icu_hr_zone_times) ? a.icu_hr_zone_times : null,
+    powerZoneSecs: Array.isArray(a.icu_zone_times) ? a.icu_zone_times.filter(z => /^Z\d$/.test(z.id)).sort((x, y) => x.id.localeCompare(y.id)).map(z => z.secs) : null,
+    paceZoneSecs: Array.isArray(a.gap_zone_times) && a.use_gap_zone_times !== false && a.gap_zone_times.some(Boolean) ? a.gap_zone_times : (Array.isArray(a.pace_zone_times) ? a.pace_zone_times : null),
+    lthr: a.lthr ?? null,
+    efficiency: a.icu_efficiency_factor ?? null,
     description: a.description || '',
     paceSecKm: sport === 'run' && moving && dist ? moving / (dist / 1000) : null,
     pace100: sport === 'swim' && moving && dist ? moving / (dist / 100) : null,
@@ -113,6 +124,11 @@ export function normalizeWellness(w) {
     soreness: w.soreness ?? null,
     fatigue: w.fatigue ?? null,
     weight: w.weight ?? null,
+    vo2max: w.vo2max ?? null,
+    sleepQuality: w.sleepQuality ?? null,
+    avgSleepingHR: w.avgSleepingHR ?? null,
+    spO2: w.spO2 ?? null,
+    stress: w.stress ?? null,
   };
 }
 

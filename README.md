@@ -18,6 +18,10 @@ Adaptive sub-12 Ironman training app that runs entirely in your browser and read
 - **Activities** — every activity matched to its planned session, with a coach summary: verdict (on target / too hard / under-delivered), what happened and what to change. Uses Claude (Anthropic API key, optional) or built-in rules.
 - **Progress** — projected race time from current thresholds, progress toward sub-12 targets (CSS 1:48, run threshold 5:13/km, FTP ≈230 W), fitness/fatigue chart, planned vs done hours.
 
+- **Your zones** — HR, power and pace zones, LTHR and max HR come from your intervals.icu sport settings. Workout steps show watts/pace *and* your HR range; activity analysis compares time in your zones (power for bike, GAP pace for run, HR as the physiological check) with the zones the planned steps prescribe.
+- **Threshold estimation** — FTP from intervals.icu eFTP, per-ride power-model FTP and power at your LTHR (HR regression); run threshold from pace at LTHR, hard sustained runs and races; swim CSS from a "CSS test" activity (session averages are shown but never auto-applied). Modes: automatic (max ±5% per update), suggest & confirm, follow intervals.icu, manual. Every change is logged.
+- **Health widgets** on the home screen: readiness (device value or calculated from HRV, resting HR, sleep, form), sleep, fitness, fatigue, form, VO2max (device or estimated from eFTP), HRV, resting HR. Tap any widget for a 7/30/90/180-day trend.
+
 ## Setup
 
 1. Open the app → **Settings**.

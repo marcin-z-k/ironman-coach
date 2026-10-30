@@ -18,7 +18,10 @@ export const DEFAULTS = {
   longBikeDay: 6,           // 0=Sun .. 6=Sat
   longRunDay: 0,
   planStart: null,          // ISO date the plan was anchored on (first launch)
-  autoThresholds: true,
+  autoThresholds: true,     // legacy
+  thresholdSource: 'auto',  // auto | suggest | intervals | manual
+  thresholdLog: [],         // [{date, field, from, to, source}]
+  lastIcu: null,            // thresholds last seen in intervals.icu sport settings
   planFromHistory: true,    // build weekly structure from last 8 weeks of activities
   demo: false,
 };
