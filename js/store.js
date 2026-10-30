@@ -19,6 +19,7 @@ export const DEFAULTS = {
   longRunDay: 0,
   planStart: null,          // ISO date the plan was anchored on (first launch)
   autoThresholds: true,
+  planFromHistory: true,    // build weekly structure from last 8 weeks of activities
   demo: false,
 };
 

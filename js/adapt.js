@@ -1,6 +1,7 @@
 // Adaptation engine: compares executed vs planned training, reads fatigue/wellness
 // and decides how the plan should change (volume factor, intensity cap, today's tweak).
-import { isoDate, addDays, today, daysBetween, round, clamp } from './util.js';
+import { isoDate, addDays, today, daysBetween, round, clamp, startOfWeek } from './util.js';
+import { buildProfile } from './history.js';
 import { generatePlan, weekForDate } from './plan.js';
 
 // Match executed activities to planned sessions (same day + sport; closest duration).
@@ -36,8 +37,9 @@ export function latestWellness(wellness) {
 }
 
 export function analyse(settings, data) {
-  const base = generatePlan(settings);           // un-adjusted reference
   const acts = data?.activities || [];
+  const profile = settings.planFromHistory === false ? null : buildProfile(acts, isoDate(startOfWeek(today())), 8);
+  const base = generatePlan(settings, undefined, profile);           // un-adjusted reference
   const well = data?.wellness || [];
   const t = today();
   const tIso = isoDate(t);
@@ -83,7 +85,7 @@ export function analyse(settings, data) {
     factor = 1.05; reason = 'Two solid weeks, fresh enough — volume raised 5% to keep progressing toward sub-12.';
   }
   const currentWeek = weekForDate(base, tIso);
-  const plan = generatePlan(settings, { factor, fromWeek: currentWeek ? currentWeek.index : 0, intensityCap });
+  const plan = generatePlan(settings, { factor, fromWeek: currentWeek ? currentWeek.index : 0, intensityCap }, profile);
   const planMatches = matchSessions(plan, acts);
 
   // Today's recommendation
@@ -101,7 +103,7 @@ export function analyse(settings, data) {
   // Goal projection
   const goal = goalProjection(settings, acts, data?.athlete);
 
-  return { plan, base, matches: planMatches, wellness: w, compliance: { c7, c14 }, flags, adjustment: { factor, intensityCap, reason }, todayNote, goal, todayIso: tIso };
+  return { plan, base, profile, matches: planMatches, wellness: w, compliance: { c7, c14 }, flags, adjustment: { factor, intensityCap, reason }, todayNote, goal, todayIso: tIso };
 }
 
 // Sub-12 target model: swim 1:15 + T1 6 + bike 6:00 + T2 4 + run 4:20 ≈ 11:45.

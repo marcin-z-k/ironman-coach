@@ -213,3 +213,5 @@ details.more[open] summary { margin-bottom: 8px; }
   .readiness-grid { gap: 10px; }
 }
 .ico svg { width: 24px; height: 24px; fill: currentColor; }
+.ref { margin: 4px 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: rgba(76,195,255,.07); border: 1px solid rgba(76,195,255,.22); font-size: 13px; line-height: 1.45; }
+.ref b { color: var(--text); }

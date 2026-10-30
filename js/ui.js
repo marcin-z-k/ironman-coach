@@ -2,6 +2,7 @@ import { isoDate, addDays, startOfWeek, today, fmtDur, fmtSec, fmtPace, fmtPace1
 import { PHASES, zones } from './plan.js';
 import { load, save, DEFAULTS } from './store.js';
 import { summarise, getSummary, ruleSummary } from './analysis.js';
+import { describeProfile } from './history.js';
 
 const h = (html) => el(html);
 
@@ -78,6 +79,32 @@ export function renderToday(A, ui) {
   return root;
 }
 
+function refMetric(r) {
+  if (!r) return '';
+  if (r.sport === 'bike') return r.np ? `NP ${r.np} W` : r.avgW ? `${r.avgW} W` : '';
+  if (r.sport === 'run') return r.paceSecKm ? fmtPace(r.paceSecKm) : '';
+  if (r.sport === 'swim') return r.pace100 ? fmtPace100(r.pace100) : '';
+  return '';
+}
+function refDelta(x) {
+  if (!x.ref) return '';
+  const d = Math.round(x.min - x.ref.min);
+  if (Math.abs(d) < 5) return 'same duration';
+  return `${d > 0 ? '+' : '−'}${fmtDur(Math.abs(d))}`;
+}
+function refBlock(x) {
+  if (!x.ref) return x.role === 'brick' ? '<div class="ref"><span class="faint">New element:</span> brick run straight off your long ride.</div>' : (x.habitual === false ? '<div class="ref"><span class="faint">Added:</span> you don\'t usually train this sport on this day — the Ironman build needs it. Move it if it doesn\'t fit.</div>' : '');
+  const r = x.ref;
+  const bits = [fmtDur(r.min), r.distanceM ? fmtKm(r.distanceM) : '', refMetric(r), r.intensity != null ? `IF ${r.intensity}%` : ''].filter(Boolean).join(' · ');
+  return `<div class="ref"><div class="faint small">Based on your ${SPORT_LABEL[r.sport].toLowerCase()} · ${fmtDate(r.date)}</div><div><b>${esc(r.name)}</b> — ${bits}</div><div class="small" style="margin-top:4px">This time: <b>${refDelta(x)}</b>${x.role === 'key' || x.role === 'long' ? ' · ' + esc(progressionHint(x)) : ''}</div></div>`;
+}
+function progressionHint(x) {
+  const r = x.ref; const s = load();
+  if (x.sport === 'bike') { const tgt = Math.round(s.ftp * x.if); return r.np ? (tgt > r.np ? `aim ~${tgt} W (vs ${r.np} W)` : `hold ~${tgt} W`) : `aim ~${tgt} W`; }
+  if (x.sport === 'run') return x.kind.startsWith('long') ? 'same easy pace, more time on feet' : 'structured intervals instead of steady';
+  return 'add structure at CSS pace';
+}
+
 function sessionHero(x, done, label, A) {
   const total = x.steps.reduce((a, st) => a + st.min + (st.rest || 0), 0);
   const card = h(`<div class="card hero session-hero">
@@ -89,6 +116,7 @@ function sessionHero(x, done, label, A) {
       <div class="metric"><div class="v">${x.tss}</div><div class="k">Load</div></div>
       <div class="metric"><div class="v">${Math.round(x.if * 100)}%</div><div class="k">Intensity</div></div>
     </div>
+    ${refBlock(x)}
     <div class="steps">${x.steps.map(st => `<div class="step"><span class="bar z${st.zone}"></span><span>${esc(st.text)}${st.rest ? ` <span class="faint">· ${st.rest} min easy</span>` : ''}</span><span class="t">${Math.round(st.min)} min</span></div>`).join('')}</div>
     ${x.note ? `<p class="small muted" style="margin-top:12px">${esc(x.note)}</p>` : ''}
   </div>`);
@@ -105,7 +133,8 @@ export function renderPlan(A, ui) {
     <div class="row between"><div class="big">${plan.totalWeeks + 1} <span class="small muted" style="font-weight:600">weeks</span></div><div class="small muted" style="text-align:right">${fmtDate(plan.anchor)} → ${fmtDate(plan.raceDate, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>
     <div class="phase-bar">${order.filter(p => counts[p]).map(p => `<span class="phase-${p}" style="flex:${counts[p]}"></span>`).join('')}</div>
     <div class="phase-legend">${order.filter(p => counts[p]).map(p => `<span><span class="dot phase-${p}" style="margin-right:4px"></span>${PHASES[p].label} ${counts[p]}w</span>`).join('')}</div>
-    <div class="small muted" style="margin-top:12px">Every 4th week is a recovery week (−35%). Volume ramps from ${load().weeklyHours} h to a peak of ${Math.max(...plan.weeks.map(w => w.hours)).toFixed(1)} h/week. The plan re-shapes itself from your intervals.icu data: fatigue, compliance and new thresholds change what comes next.</div>
+    ${plan.profile ? `<div class="ref" style="margin-top:12px"><div class="faint small">Built from your last ${plan.profile.nWeeks} weeks in intervals.icu</div><div><b>${(plan.profile.baseMin / 60).toFixed(1)} h/week</b> · ${plan.profile.sessionsPerWeek} sessions · long ride ${fmtDur(plan.profile.sports.bike.longest)} · long run ${fmtDur(plan.profile.sports.run.longest)}</div><div class="small muted" style="margin-top:4px">Your usual days: ${esc(describeProfile(plan.profile))}</div></div>` : `<div class="ref" style="margin-top:12px"><div class="small muted">Not enough recent history yet (needs ~3 weeks of activities) — using a standard template from your Settings hours. It switches to your own pattern automatically once data is there.</div></div>`}
+    <div class="small muted" style="margin-top:12px">Same days and sports you already train; durations grow from yours (long ride toward 5 h, long run toward 2 h 20). Every 4th week is a recovery week. Volume ramps from ${plan.baseHours.toFixed(1)} h to a peak of ${Math.max(...plan.weeks.map(w => w.hours)).toFixed(1)} h/week, and fatigue, compliance and new thresholds re-shape what comes next.</div>
   </div>`));
 
   const list = h('<div class="stack" style="gap:8px"></div>');
@@ -135,7 +164,7 @@ function sessionRow(x, done, todayIso, withDate = false) {
   const missed = !done && x.date < todayIso;
   return `<div class="session-item ${done ? 'done' : ''} ${missed ? 'missed' : ''}" data-date="${x.date}">
     <span class="ico sport-${x.sport}">${sportIcon(x.sport)}</span>
-    <div><div class="name">${esc(x.title)}${x.key ? ' <span class="pill accent" style="padding:1px 7px;font-size:10px">key</span>' : ''}</div><div class="sub">${withDate ? fmtDate(x.date) + ' · ' : ''}${fmtDur(x.min)} · load ${x.tss}${done ? ` · <span class="sport-run">done ${fmtDur(done.movingSec / 60)}</span>` : missed ? ' · <span class="sport-brick">missed</span>' : ''}</div></div>
+    <div><div class="name">${esc(x.title)}${x.key ? ' <span class="pill accent" style="padding:1px 7px;font-size:10px">key</span>' : ''}</div><div class="sub">${withDate ? fmtDate(x.date) + ' · ' : ''}${fmtDur(x.min)}${x.ref ? ` <span class="faint">(last time ${fmtDur(x.ref.min)})</span>` : x.habitual === false && x.role !== 'brick' ? ' <span class="faint">(added)</span>' : ''} · load ${x.tss}${done ? ` · <span class="sport-run">done ${fmtDur(done.movingSec / 60)}</span>` : missed ? ' · <span class="sport-brick">missed</span>' : ''}</div></div>
     <div class="right">${Math.round(x.if * 100)}%</div></div>`;
 }
 
@@ -279,13 +308,14 @@ export function renderSettings(ui, onSave) {
       </div>
       <div class="field"><div class="hint">Keys are stored only in this browser (localStorage) and sent only to intervals.icu. Find both under intervals.icu → Settings → Developer Settings.</div></div>
       <div class="field"><label><input type="checkbox" name="autoThresholds" ${s.autoThresholds ? 'checked' : ''} style="width:auto;margin-right:8px">Update FTP / paces automatically from my intervals.icu sport settings</label></div>
+      <div class="field"><label><input type="checkbox" name="planFromHistory" ${s.planFromHistory !== false ? 'checked' : ''} style="width:auto;margin-right:8px">Build the plan from my last 8 weeks (my days, sports and durations)</label><div class="hint">Off = standard template using "Current weekly hours" below.</div></div>
 
       <div class="card-title" style="margin-top:8px">Race & goal</div>
       <div class="grid2">
         <div class="field"><label>Race name</label><input name="raceName" value="${esc(s.raceName)}"></div>
         <div class="field"><label>Race date</label><input name="raceDate" type="date" value="${esc(s.raceDate)}"></div>
         <div class="field"><label>Goal time (hours)</label><input name="goalHours" type="number" step="0.25" min="8" max="17" value="${s.goalHours}"></div>
-        <div class="field"><label>Current weekly hours</label><input name="weeklyHours" type="number" step="0.5" min="4" max="20" value="${s.weeklyHours}"></div>
+        <div class="field"><label>Weekly hours (template fallback)</label><input name="weeklyHours" type="number" step="0.5" min="4" max="20" value="${s.weeklyHours}"></div>
       </div>
 
       <div class="card-title" style="margin-top:8px">Thresholds</div>
@@ -323,7 +353,7 @@ export function renderSettings(ui, onSave) {
       athleteId: fd.get('athleteId').trim(), apiKey: fd.get('apiKey').trim(), anthropicKey: fd.get('anthropicKey').trim(), anthropicModel: fd.get('anthropicModel').trim() || DEFAULTS.anthropicModel,
       corsProxy: fd.get('corsProxy').trim(), raceName: fd.get('raceName').trim() || 'Ironman', raceDate: fd.get('raceDate'), goalHours: +fd.get('goalHours') || 12, weeklyHours: +fd.get('weeklyHours') || 9.5,
       ftp: +fd.get('ftp') || 180, weightKg: +fd.get('weightKg') || 75, runThreshold: strToPace(fd.get('runThreshold')) || 340, css: strToPace(fd.get('css')) || 110,
-      longBikeDay: +fd.get('longBikeDay'), longRunDay: +fd.get('longRunDay'), autoThresholds: fd.get('autoThresholds') === 'on', demo: fd.get('demo') === 'on',
+      longBikeDay: +fd.get('longBikeDay'), longRunDay: +fd.get('longRunDay'), autoThresholds: fd.get('autoThresholds') === 'on', planFromHistory: fd.get('planFromHistory') === 'on', demo: fd.get('demo') === 'on',
       planStart: fd.get('planStart') || s.planStart || isoDate(new Date()),
     };
     if (patch.athleteId && /^\d+$/.test(patch.athleteId)) patch.athleteId = 'i' + patch.athleteId;

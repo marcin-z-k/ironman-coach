@@ -7,7 +7,7 @@ Adaptive sub-12 Ironman training app that runs entirely in your browser and read
 ## What it does
 
 - **Today** — the session(s) you should do today with steps, targets in watts / pace, and a week strip. Readiness (fitness, fatigue, form, HRV, resting HR, sleep) from intervals.icu wellness.
-- **Plan** — periodised plan from now to race day: Base → Build → Peak → Taper → Race week, every 4th week a recovery week. Volume ramps from your current weekly hours by ~45%.
+- **Plan** — built from your last 8 weeks in intervals.icu: the same days and sports you already train, durations grown from your own, long ride progressing toward 5 h and long run toward 2 h 20. Periodised Base → Build → Peak → Taper → Race week, every 4th week a recovery week. Each session shows the past activity it is based on and what changes this time. Sessions the Ironman build needs but you don't do yet (e.g. a 3rd run, brick runs) are added and marked. Falls back to a standard template if there are fewer than ~3 weeks of data.
 - **Adaptation** — on every sync the plan is re-shaped from your data:
   - deep fatigue (form < −30 or several warning signs) → week −20%, intensity removed
   - carrying fatigue / ramp rate > 7 → −10%

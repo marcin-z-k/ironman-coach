@@ -2,6 +2,7 @@
 // Deterministic from settings (race date, thresholds, weekly hours, anchor date) plus an
 // adjustment factor from the adaptation engine applied to current/future weeks.
 import { isoDate, addDays, startOfWeek, parseDate, paceToStr, clamp, round } from './util.js';
+import { refInfo } from './history.js';
 
 export const PHASES = {
   base:  { label: 'Base',  desc: 'Aerobic foundation, swim technique, sweet-spot strength on the bike.' },
@@ -31,7 +32,7 @@ function phaseFor(wtg, totalWeeks) {
   return 'base';
 }
 
-export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap: null }) {
+export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap: null }, profile = null) {
   const anchor = startOfWeek(parseDate(s.planStart || isoDate(new Date())));
   const race = parseDate(s.raceDate);
   const raceWeekStart = startOfWeek(race);
@@ -39,7 +40,7 @@ export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap:
   if (totalWeeks < 0) return { weeks: [], totalWeeks: 0, anchor: isoDate(anchor), raceDate: s.raceDate };
 
   const taperStart = Math.max(1, totalWeeks - 2);
-  const H0 = s.weeklyHours || 9.5;
+  const H0 = profile ? profile.baseMin / 60 : (s.weeklyHours || 9.5);
   const cap = clamp(H0 * 1.5, H0, 15);
   const z = zones(s);
   const weeks = [];
@@ -60,12 +61,15 @@ export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap:
     const start = addDays(anchor, i * 7);
     const dates = Array.from({ length: 7 }, (_, d) => isoDate(addDays(start, d)));
     const intensityCap = i >= adjust.fromWeek ? adjust.intensityCap : null;
-    const sessions = buildWeek({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensityCap, raceDate: s.raceDate });
+    const f = i >= adjust.fromWeek ? adjust.factor : 1;
+    const sessions = (profile && phase !== 'race')
+      ? buildWeekFromProfile({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensityCap, prog, f, profile })
+      : buildWeek({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensityCap, raceDate: s.raceDate });
     if (phase === 'build' || phase === 'peak') keyAlt++;
     weeks.push({ index: i, wtg, start: dates[0], end: dates[6], dates, phase, recovery, hours, sessions,
       plannedLoad: sessions.reduce((a, x) => a + (x.tss || 0), 0), plannedMin: sessions.reduce((a, x) => a + (x.min || 0), 0) });
   }
-  return { weeks, totalWeeks, anchor: isoDate(anchor), raceDate: s.raceDate, zones: z };
+  return { weeks, totalWeeks, anchor: isoDate(anchor), raceDate: s.raceDate, zones: z, profile, baseHours: H0 };
 }
 
 function buildWeek({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensityCap, raceDate }) {
@@ -118,6 +122,57 @@ function buildWeek({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensity
   if (brick) push(SAT, run('brick', R * 0.10, z, s));
   // Sunday — long run
   push(SUN, run(easyOnly ? 'longeasy' : (phase === 'peak' ? 'longim' : phase === 'build' ? 'longfinish' : 'longeasy'), R * (brick ? 0.35 : 0.45), z, s, true));
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Week built on the athlete's own pattern: same days, same sports, durations grown from
+// their usual durations; long sessions progress toward Ironman-specific lengths.
+function buildWeekFromProfile({ s, z, phase, recovery, hours, dates, keyAlt, wtg, intensityCap, prog, f, profile }) {
+  const easyOnly = recovery || intensityCap === 'easy';
+  const taperMult = phase === 'taper' ? (wtg === 2 ? 0.6 : 0.45) : 1;
+  const recMult = recovery ? 0.7 : 1;
+  const lerp = (a, b) => a + (b - a) * prog;
+  const brickOn = !easyOnly && (phase === 'build' || phase === 'peak');
+  const brickMin = brickOn ? Math.round(15 + 15 * prog) : 0;
+
+  // long sessions grow from the athlete's current long ride/run toward IM targets (5 h ride, 2 h 20 run)
+  const longMin = (slot) => {
+    const peak = slot.sport === 'bike' ? Math.max(slot.min, 300) : Math.max(slot.min, 140);
+    return lerp(slot.min, peak) * recMult * taperMult * f;
+  };
+  const slots = profile.slots;
+  const longs = slots.filter(x => x.role === 'long');
+  const others = slots.filter(x => x.role !== 'long');
+  const longTotal = longs.reduce((a, x) => a + longMin(x), 0);
+  const othersBase = others.reduce((a, x) => a + x.min, 0) || 1;
+  const scale = clamp((hours * 60 - longTotal - brickMin) / othersBase, 0.55, 1.7);
+
+  let easyBikeSeen = false, swimN = 0;
+  const out = [];
+  for (const slot of slots) {
+    const min = slot.role === 'long' ? longMin(slot) : slot.min * scale;
+    let kind;
+    if (slot.sport === 'bike') {
+      if (slot.role === 'long') kind = easyOnly ? 'long' : phase === 'peak' ? 'longim' : phase === 'build' ? 'longss' : phase === 'taper' ? 'endurance' : 'long';
+      else if (slot.role === 'key') kind = easyOnly ? 'endurance' : phase === 'base' ? 'sweetspot' : phase === 'build' ? (keyAlt % 2 ? 'vo2' : 'threshold') : phase === 'peak' ? 'racepower' : 'openers';
+      else { kind = (!easyOnly && !easyBikeSeen && (phase === 'build' || phase === 'peak')) ? 'tempo' : 'endurance'; easyBikeSeen = true; }
+    } else if (slot.sport === 'run') {
+      if (slot.role === 'long') kind = easyOnly || phase === 'base' || phase === 'taper' ? 'longeasy' : phase === 'peak' ? 'longim' : 'longfinish';
+      else if (slot.role === 'key') kind = easyOnly ? 'easy' : phase === 'base' ? 'tempo' : phase === 'build' ? 'threshold' : phase === 'peak' ? 'impace' : 'strides';
+      else kind = 'easy';
+    } else {
+      if (slot.role === 'key') kind = easyOnly ? 'endurance' : phase === 'taper' ? 'openers' : 'css';
+      else kind = (phase === 'base' && swimN++ % 2 === 0) ? 'technique' : 'endurance';
+    }
+    const builder = slot.sport === 'bike' ? bike : slot.sport === 'run' ? run : swim;
+    const sess = builder(kind, Math.max(20, min), z, s, slot.role !== 'easy');
+    const ref = refInfo(slot.acts[0]);
+    out.push({ ...sess, date: dates[slot.dow], id: `${dates[slot.dow]}-${slot.sport}-${slot.dow}-${slot.role}`, ref, habitual: !slot.synthetic, role: slot.role });
+    if (slot.sport === 'bike' && slot.role === 'long' && brickMin) {
+      const b = run('brick', brickMin, z, s, false);
+      out.push({ ...b, date: dates[slot.dow], id: `${dates[slot.dow]}-run-brick`, ref: null, habitual: false, role: 'brick' });
+    }
+  }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
