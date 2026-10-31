@@ -18,7 +18,10 @@ export const DEFAULTS = {
   runContinuous: null,      // km you can run without walking (null = from longest run)
   weekTemplate: null,       // null = default fixed week
   moves: {},                // manual day swaps {sessionId: date}
-  holds: {},                // {field: isoDate} manual threshold edits protected until date
+  holds: {},
+  manualHr: null,           // { enabled, tops: [z1..z5 bpm], lthr }
+  raceTargetW: 230,         // outdoor race FTP target
+  ftpCoupling: null,        // { ratio, outdoor, indoor, date, source } outdoor/indoor FTP ratio                // {field: isoDate} manual threshold edits protected until date
   runThreshold: 340,        // s/km  (5:40)
   css: 110,                 // s/100m (1:50)
   weightKg: 75,

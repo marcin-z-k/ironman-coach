@@ -20,6 +20,9 @@
     <div class="brand"><span class="brand-mark"></span><span class="brand-name">Ironman Coach</span></div>
     <div class="topbar-right">
       <span id="syncStatus" class="sync-status" title="Sync status"></span>
+      <button id="btnFuel" class="icon-btn" aria-label="Fueling calculator" title="Fueling calculator">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16"/><path d="M3 21h13"/><path d="M15 9h2a2 2 0 0 1 2 2v6a1.5 1.5 0 0 0 3 0V8l-3-3"/><path d="M7 7h5v4H7z"/></svg>
+      </button>
       <button id="btnRefresh" class="icon-btn" aria-label="Refresh data">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
       </button>
@@ -36,6 +39,7 @@
     <button class="tab" data-tab="settings" role="tab"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 .1-1 7.6 7.6 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.5 11a7.6 7.6 0 0 0-.1 1 7.6 7.6 0 0 0 .1 1l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1a7.3 7.3 0 0 0 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.2 0 .5-.2.5-.4l.4-2.6a7.3 7.3 0 0 0 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg><span>Settings</span></button>
   </nav>
 </div>
+<div id="sheet" class="sheet" hidden><div class="sheet-backdrop"></div><div class="sheet-panel" role="dialog" aria-modal="true"></div></div>
 <div id="toast" class="toast" hidden></div>
 <script type="module" src="js/app.js"></script>
 </body>

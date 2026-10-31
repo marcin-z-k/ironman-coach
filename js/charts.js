@@ -42,7 +42,7 @@ export function lineChart(o) {
     const past = s.futureFrom ? pts.filter(p => p.x <= s.futureFrom) : pts;
     const fut = s.futureFrom ? pts.filter(p => p.x >= s.futureFrom) : [];
     if (s.area && past.length > 1) svg += `<path class="fadein" d="${path(past)} L${X(t(past[past.length - 1].x))},${Y(Math.max(mn, Math.min(mx, 0 > mn ? 0 : mn)))} L${X(t(past[0].x))},${Y(Math.max(mn, Math.min(mx, 0 > mn ? 0 : mn)))} Z" fill="${s.color}" opacity=".1"/>`;
-    if (past.length > 1) svg += `<path class="${s.dash ? 'fadein' : 'draw'}" pathLength="1" d="${path(past)}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2.2}" ${s.dash ? 'stroke-dasharray="4 3"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (past.length > 1) svg += `<path class="${s.dash ? 'fadein' : 'draw'}" pathLength="1" d="${path(past)}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2.2}" ${s.dash ? 'stroke-dasharray="4 3"' : ''} stroke-linejoin="round" stroke-linecap="round" style="${s.dash || (s.width || 2.2) < 1 ? '' : `filter:drop-shadow(0 0 3px ${s.color})`}"/>`;
     if (fut.length > 1) svg += `<path class="fadein" d="${path(fut)}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2.2}" stroke-dasharray="5 4" opacity=".75"/>`;
     if (s.dots) svg += pts.map(p => `<circle cx="${X(t(p.x)).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="2.6" fill="${s.color}"/>`).join('');
   }
@@ -84,16 +84,19 @@ export function barChart(o) {
   const W = 460, H = o.height || 170, pad = { l: 30, r: 6, t: 10, b: 22 };
   const wrap = el('<div class="lc"></div>');
   const n = o.cats.length, k = o.series.length;
-  const mx = Math.max(1, ...o.series.flatMap(s => s.values)) * 1.1;
-  const slot = (W - pad.l - pad.r) / n, bw = Math.min(10, slot / (k + 1));
+  const mx = (o.stacked ? Math.max(1, ...o.cats.map((_, i) => o.series.reduce((a, s) => a + (s.values[i] || 0), 0))) : Math.max(1, ...o.series.flatMap(s => s.values))) * 1.1;
+  const slot = (W - pad.l - pad.r) / n, bw = o.stacked ? Math.min(22, slot * 0.6) : Math.min(10, slot / (k + 1));
   const Y = v => pad.t + (1 - v / mx) * (H - pad.t - pad.b);
   const fmt = o.yFmt || (v => String(round(v, 1)));
   let svg = '';
   for (let i = 0; i <= 3; i++) { const v = mx * i / 3; svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="#20252e"/><text x="${pad.l - 5}" y="${Y(v) + 4}" fill="#5d6678" font-size="10" text-anchor="end">${esc(fmt(v))}</text>`; }
   o.cats.forEach((c, i) => {
     const cx = pad.l + slot * i + slot / 2;
+    let acc = 0;
     o.series.forEach((s, j) => {
-      const v = s.values[i] || 0, x = cx - (k * bw + (k - 1) * 2) / 2 + j * (bw + 2);
+      const v = s.values[i] || 0;
+      if (o.stacked) { const y0 = Y(acc), y1 = Y(acc + v); acc += v; if (v > 0) svg += `<rect class="grow" style="animation-delay:${i * 25}ms" x="${(cx - bw / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bw}" height="${Math.max(0, y0 - y1).toFixed(1)}" fill="${s.color}"/>`; return; }
+      const x = cx - (k * bw + (k - 1) * 2) / 2 + j * (bw + 2);
       const col = s.colors?.[i] || s.color;
       svg += `<rect class="grow" style="animation-delay:${i * 25}ms" x="${x.toFixed(1)}" y="${Y(v).toFixed(1)}" width="${bw}" height="${Math.max(0, H - pad.b - Y(v)).toFixed(1)}" rx="2.5" fill="${col}" opacity="${o.dim?.(i) && j > 0 ? .25 : 1}"/>`;
     });
@@ -105,7 +108,8 @@ export function barChart(o) {
   const show = (i) => {
     const c = o.cats[i];
     hl.setAttribute('x', pad.l + slot * i); hl.setAttribute('visibility', 'visible');
-    tip.innerHTML = `<div class="th">${esc(c.title || c.label)}</div>${o.series.map(s => `<div class="tr"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}<b>${esc(fmt(s.values[i] || 0))}</b></div>`).join('')}`;
+    const tot = o.series.reduce((a, s) => a + (s.values[i] || 0), 0);
+    tip.innerHTML = `<div class="th">${esc(c.title || c.label)}</div>${o.series.map(s => `<div class="tr"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}<b>${esc(fmt(s.values[i] || 0))}${o.stacked && tot ? ` · ${Math.round((s.values[i] || 0) / tot * 100)}%` : ''}</b></div>`).join('')}${o.stacked ? `<div class="tr" style="margin-top:3px">Total<b>${esc(fmt(tot))}</b></div>` : ''}`;
     tip.hidden = false;
     const r = svgEl.getBoundingClientRect();
     const left = (pad.l + slot * (i + 0.5)) / W * r.width;
@@ -114,5 +118,63 @@ export function barChart(o) {
   svgEl.addEventListener('pointermove', (ev) => { const r = svgEl.getBoundingClientRect(); const px = (ev.clientX - r.left) / r.width * W; const i = Math.floor((px - pad.l) / slot); if (i >= 0 && i < n) show(i); });
   svgEl.addEventListener('pointerdown', (ev) => svgEl.dispatchEvent(new PointerEvent('pointermove', ev)));
   svgEl.addEventListener('pointerleave', () => { tip.hidden = true; hl.setAttribute('visibility', 'hidden'); });
+  return wrap;
+}
+
+
+/**
+ * streamChart({ x: [sec], y: [values], color, name, fmt, avg, bands: [{y0,y1,color}], invert, height, xFmt, group })
+ * Charts sharing the same `group` object move their crosshair together.
+ */
+export function streamChart(o) {
+  const W = 460, H = o.height || 150, pad = { l: 36, r: 8, t: 10, b: 20 };
+  const wrap = el('<div class="lc stream"></div>');
+  const pts = o.y.map((v, i) => [o.x[i], v]).filter(p => p[1] != null && isFinite(p[1]));
+  if (pts.length < 5) { wrap.append(el('<div class="muted small" style="padding:14px 0">No data</div>')); return wrap; }
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const sorted = [...ys].sort((a, b) => a - b);
+  // robust range (1st–99th percentile) so single spikes don't flatten the chart
+  let mn = o.yMin ?? sorted[Math.floor(sorted.length * 0.01)], mx = o.yMax ?? sorted[Math.ceil(sorted.length * 0.99) - 1];
+  for (const b of o.bands || []) { mn = Math.min(mn, b.y0); mx = Math.max(mx, b.y1); }
+  if (o.bands?.length) { mn = Math.max(mn, sorted[0] - 5); mx = Math.min(mx, sorted[sorted.length - 1] + 5); }
+  const py = (mx - mn) * 0.08 || 1; mn -= py; mx += py;
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  const X = v => pad.l + (v - x0) / ((x1 - x0) || 1) * (W - pad.l - pad.r);
+  const Y = v => { const f = (Math.max(mn, Math.min(mx, v)) - mn) / (mx - mn); return pad.t + (o.invert ? f : 1 - f) * (H - pad.t - pad.b); };
+  const fmt = o.fmt || (v => String(Math.round(v)));
+  const xf = o.xFmt || (v => { const m = Math.floor(v / 60); return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}` : `${m}′`; });
+  const gid = 'g' + Math.random().toString(36).slice(2, 8);
+  let svg = `<defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${o.color}" stop-opacity=".35"/><stop offset="1" stop-color="${o.color}" stop-opacity="0"/></linearGradient><filter id="${gid}f" x="-5%" y="-30%" width="110%" height="160%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`;
+  for (const b of o.bands || []) { const ya = Y(b.y0), yb = Y(b.y1); svg += `<rect x="${pad.l}" width="${W - pad.l - pad.r}" y="${Math.min(ya, yb)}" height="${Math.abs(yb - ya)}" fill="${b.color}"/>`; }
+  const af = o.axisFmt || (v => String(Math.round(v)));
+  for (let i = 0; i <= 3; i++) { const v = mn + (mx - mn) * i / 3; svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="#20252e"/><text x="${pad.l - 5}" y="${Y(v) + 4}" fill="#5d6678" font-size="10" text-anchor="end">${esc(af(v))}</text>`; }
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ');
+  const base = o.invert ? pad.t : H - pad.b;
+  svg += `<path class="fadein" d="${line} L${X(x1)},${base} L${X(x0)},${base} Z" fill="url(#${gid})"/>`;
+  svg += `<path class="draw" pathLength="1" d="${line}" fill="none" stroke="${o.color}" stroke-width="1.8" stroke-linejoin="round" filter="url(#${gid}f)"/>`;
+  if (o.avg != null) svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(o.avg)}" y2="${Y(o.avg)}" stroke="#fff" stroke-opacity=".55" stroke-dasharray="4 4"/><text x="${W - pad.r - 2}" y="${Y(o.avg) - 4}" fill="#cfd5df" font-size="10" text-anchor="end">avg ${esc(fmt(o.avg))}</text>`;
+  [0, 0.5, 1].forEach(f => { const v = x0 + (x1 - x0) * f; svg += `<text x="${X(v)}" y="${H - 5}" fill="#5d6678" font-size="10" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${xf(v)}</text>`; });
+  wrap.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">${svg}<g class="hover" visibility="hidden"><line class="cx" y1="${pad.t}" y2="${H - pad.b}" stroke="#cfd5df"/><circle class="cd" r="4" fill="${o.color}" stroke="#0b0d11" stroke-width="2"/></g></svg><div class="tip" hidden></div>`;
+  const svgEl = wrap.querySelector('svg'), tip = wrap.querySelector('.tip'), g = wrap.querySelector('.hover');
+  const setAt = (xv) => {
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m][0] < xv) lo = m; else hi = m; }
+    const p = Math.abs(pts[lo][0] - xv) < Math.abs(pts[hi][0] - xv) ? pts[lo] : pts[hi];
+    const sx = X(p[0]);
+    g.setAttribute('visibility', 'visible');
+    g.querySelector('.cx').setAttribute('x1', sx); g.querySelector('.cx').setAttribute('x2', sx);
+    g.querySelector('.cd').setAttribute('cx', sx); g.querySelector('.cd').setAttribute('cy', Y(p[1]));
+    tip.innerHTML = `<div class="th">${xf(p[0])}${o.xExtra ? ' · ' + esc(o.xExtra(p[0])) : ''}</div><div class="tr"><span class="dot" style="background:${o.color}"></span>${esc(o.name)}<b>${esc(fmt(p[1]))}</b></div>`;
+    tip.hidden = false;
+    const r = svgEl.getBoundingClientRect();
+    tip.style.left = Math.min(Math.max(0, sx / W * r.width - tip.offsetWidth / 2), r.width - tip.offsetWidth) + 'px';
+  };
+  const hide = () => { tip.hidden = true; g.setAttribute('visibility', 'hidden'); };
+  const grp = o.group;
+  if (grp) (grp.members ||= []).push({ setAt, hide });
+  const move = (ev) => { const r = svgEl.getBoundingClientRect(); const xv = x0 + ((ev.clientX - r.left) / r.width * W - pad.l) / (W - pad.l - pad.r) * (x1 - x0); if (grp) grp.members.forEach(m => m.setAt(xv)); else setAt(xv); };
+  svgEl.addEventListener('pointermove', move);
+  svgEl.addEventListener('pointerdown', move);
+  svgEl.addEventListener('pointerleave', () => grp ? grp.members.forEach(m => m.hide()) : hide());
   return wrap;
 }

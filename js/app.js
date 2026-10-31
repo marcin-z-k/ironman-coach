@@ -7,7 +7,9 @@ import { analyse } from './adapt.js';
 import { swapDays } from './schedule.js';
 import { renderToday, renderPlan, renderActivities, renderProgress, renderSettings, renderSetup } from './ui.js';
 import { exportFit, exportZwo, icuEvent } from './export.js';
-import { isoDate } from './util.js';
+import { isoDate, addDays } from './util.js';
+import { prefetch } from './streams.js';
+import { renderFuelSheet } from './ui.js';
 
 const view = document.getElementById('view');
 const syncStatus = document.getElementById('syncStatus');
@@ -16,16 +18,45 @@ const TABS = ['today', 'plan', 'activities', 'progress', 'settings'];
 const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 let data = cached();
-if (data?.athlete) setZoneModel(buildZoneModel(data.athlete));
+setZoneModel(buildZoneModel(data?.athlete || null));
 let A = null;
 let syncing = false;
 let keepScrollY = null;
+
+const sheet = document.getElementById('sheet');
+const sheetPanel = sheet.querySelector('.sheet-panel');
+function openSheet(node) {
+  sheetPanel.innerHTML = ''; sheetPanel.append(node); sheetPanel.scrollTop = 0;
+  sheet.hidden = false; document.body.classList.add('noscroll');
+  requestAnimationFrame(() => sheet.classList.add('open'));
+}
+function closeSheet(instant) {
+  sheet.classList.remove('open'); document.body.classList.remove('noscroll');
+  if (instant) { sheet.hidden = true; return; }
+  setTimeout(() => { if (!sheet.classList.contains('open')) sheet.hidden = true; }, 320);
+}
+sheet.querySelector('.sheet-backdrop').onclick = () => closeSheet();
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
+
+// Load HR/speed streams of recent runs in the background (for the Z2 easy-pace chart and predictor).
+let streamsBusy = false;
+async function loadRunStreams() {
+  if (streamsBusy || !data?.activities) return;
+  const from = isoDate(addDays(new Date(), -140));
+  const runs = data.activities.filter(a => a.sport === 'run' && a.date >= from && a.avgHr && a.movingSec >= 1200);
+  if (!runs.length) return;
+  streamsBusy = true;
+  try {
+    await prefetch(runs, (d, n) => { ui.streamsLoading = d < n ? `${d}/${n}` : null; if (ui.tab === 'progress' && (d === n || d % 5 === 0)) { ui.keepScroll(); render(); } });
+  } finally { streamsBusy = false; ui.streamsLoading = null; A = null; if (sheet.hidden) { ui.keepScroll(); render(); } }
+}
 
 const ui = {
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
   trendRange: 30, selectedDate: null,
   openWeeks: new Set(), openWeeksTouched: false, openSess: new Set(), openActs: new Set(),
   pending: [],
+  openSheet, closeSheet,
   rerender: () => render(),
   invalidate: () => { A = null; render(); },
   keepScroll: () => { keepScrollY = window.scrollY; },
@@ -167,6 +198,7 @@ async function sync(fromLogin = false) {
     data = await fetchAll({ days: 150 });
     setZoneModel(buildZoneModel(data.athlete));
     updateThresholds();
+    loadRunStreams();
     A = null;
     if (!load().demo) { backupCredentials(); if (fromLogin) rememberInPasswordManager(); }
   } catch (e) {
@@ -183,6 +215,7 @@ async function sync(fromLogin = false) {
 
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 btnRefresh.onclick = () => sync();
+document.getElementById('btnFuel').onclick = () => openSheet(renderFuelSheet(ui));
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t.startsWith('trend-')) { keepScrollY = null; render(); window.scrollTo({ top: 0 }); return; } if (TABS.includes(t)) { if (t !== ui.tab) setTab(t); else render(); } });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && data?.fetchedAt && Date.now() - data.fetchedAt > 30 * 60000) sync(); });
 
@@ -190,5 +223,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && da
   if (location.hash.startsWith('#trend-')) render(); else setTab(ui.tab);
   const restored = await restoreCredentials();
   if (restored) { toast('Signed in'); render(); }
-  if (isConfigured()) { backupCredentials(); if (!data || restored || Date.now() - (data.fetchedAt || 0) > 10 * 60000) sync(); }
+  if (isConfigured()) { backupCredentials(); if (!data || restored || Date.now() - (data.fetchedAt || 0) > 10 * 60000) sync(); else loadRunStreams(); }
 })();

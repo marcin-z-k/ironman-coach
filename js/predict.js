@@ -7,6 +7,7 @@
 //        then run/walk at ~1.35× easy pace. Threshold changes shift easy pace 1:1.
 import { isoDate, addDays, round, clamp } from './util.js';
 import { hrZoneOf } from './zones.js';
+import { easyPaceSeries } from './analytics.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const since = (acts, days) => { const f = isoDate(addDays(new Date(), -days)); return acts.filter(a => a.date >= f); };
@@ -15,7 +16,8 @@ export function baseline(acts, s) {
   const out = { notes: {} };
   // swim
   const swims = since(acts, 56).filter(a => a.sport === 'swim' && a.pace100 && a.distanceM >= 800);
-  out.swimPace = swims.length ? Math.round(median(swims.map(a => a.pace100))) : s.css + 12;
+  const sp = swims.map(a => a.pace100).filter(p => p >= 70 && p <= 240);
+  out.swimPace = sp.length ? Math.round(median(sp)) : s.css + 12;
   out.swimCont = s.swimContinuous || 600;
   out.notes.swim = swims.length ? `median of ${swims.length} swims (8 wk)` : 'CSS + 12 s (no recent swims)';
   // bike — long outdoor rides
@@ -31,11 +33,12 @@ export function baseline(acts, s) {
   }
   out.bikeLongestKm = longest;
   // run — easy pace at Z2 HR, longest continuous run
+  const eps = easyPaceSeries(acts, 42).slice(-8).map(p => p.y);
   const runs = since(acts, 42).filter(a => a.sport === 'run' && (a.gapSecKm || a.paceSecKm) && a.movingSec >= 1500);
-  const z2 = runs.filter(a => a.avgHr && hrZoneOf('run', a.avgHr) <= 2).map(a => a.gapSecKm || a.paceSecKm);
-  out.runEasy = z2.length >= 2 ? Math.round(median(z2)) : runs.length ? Math.round(median(runs.map(a => a.gapSecKm || a.paceSecKm)) * 1.03) : Math.round(s.runThreshold * 1.28);
-  out.notes.run = z2.length >= 2 ? `median of ${z2.length} runs at Z2 HR (6 wk)` : 'all recent runs (no HR zones)';
-  const longRuns = since(acts, 56).filter(a => a.sport === 'run').map(a => a.distanceM / 1000);
+  out.runEasy = eps.length >= 2 ? Math.round(median(eps)) : runs.length ? Math.round(median(runs.map(a => a.gapSecKm || a.paceSecKm)) * 1.03) : Math.round(s.runThreshold * 1.28);
+  out.runEasy = clamp(out.runEasy, 240, 720);
+  out.notes.run = eps.length >= 2 ? `median Z2-HR pace of your last ${eps.length} runs` : 'recent runs (no Z2 data yet)';
+  const longRuns = since(acts, 56).filter(a => a.sport === 'run' && a.distanceM > 0 && (a.paceSecKm || a.gapSecKm)).map(a => a.distanceM / 1000);
   out.runLongestKm = longRuns.length ? round(Math.max(...longRuns), 1) : 10;
   out.runCont = clamp(round((s.runContinuous || out.runLongestKm * 1.25), 1), 5, 42.2);
   return out;
@@ -44,7 +47,7 @@ export function baseline(acts, s) {
 // d: deltas from the simulator { ftp: W, css: s/100m, thr: s/km, swimCont: m, runCont: km, wetsuit: bool }
 export function predict(b, s, d = {}) {
   // swim
-  const swimPace = b.swimPace + (d.css || 0);
+  const swimPace = clamp(b.swimPace + (d.css || 0), 75, 240);
   const cont = clamp(d.swimCont ?? b.swimCont, 100, 4000);
   const fade = cont >= 3800 ? 1.02 : 1 + 0.08 * Math.log2(3800 / cont);
   const stops = cont >= 3800 ? 0 : Math.floor(3800 / cont - 1) * 25;
@@ -56,7 +59,7 @@ export function predict(b, s, d = {}) {
   if (b.bikeLongestKm && b.bikeLongestKm < 180) kmh *= 1 - 0.03 * Math.log2(180 / Math.max(60, b.bikeLongestKm));
   const bikeSec = 180 / kmh * 3600;
   // run
-  const easy = Math.max(240, b.runEasy + (d.thr || 0));
+  const easy = clamp(b.runEasy + (d.thr || 0), 240, 720);   // sane bounds: 4:00–12:00/km
   const runCont = clamp(d.runCont ?? b.runCont, 3, 42.2) >= 42.2 ? 42.195 : clamp(d.runCont ?? b.runCont, 3, 42.2);
   const runPace = easy * 1.06 * 1.03;      // off the bike + drift
   const walkPace = easy * 1.35;           // run/walk

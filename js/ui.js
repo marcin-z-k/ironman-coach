@@ -8,11 +8,15 @@ import { estimateAll, estimateTrend } from './thresholds.js';
 import { describeTarget, fmtMin, ROLES } from './workouts.js';
 import { predict } from './predict.js';
 import { lineChart, barChart } from './charts.js';
+import { openActivity, scoreBadge } from './detail.js';
+import { executionScore, tagBricks, weeklyTiz, rampRate, monotony, greyZone, disciplineSplit, IM_TARGET, ftpCoupling, easyPaceSeries } from './analytics.js';
+import { fueling, intensityOf, carbLoading } from './nutrition.js';
 
 const h = (html) => el(html);
 const sportOf = x => x.sport === 'brick' ? 'run' : x.sport;
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const COL = { swim: '#4cc3ff', bike: '#ffb020', run: '#58e39a' };
+const COL = { swim: '#38c6ff', bike: '#ffb020', run: '#3dffa0' };
+const COL2 = { swim: '#7b6bff', bike: '#ff5e3a', run: '#00d4c8' };
 
 // ================================================================ TODAY
 export function renderToday(A, ui) {
@@ -28,6 +32,7 @@ export function renderToday(A, ui) {
   </div>`));
 
   root.append(renderRings(A, ui, week));
+  if (daysLeft >= 0 && daysLeft < 14) root.append(carbCard(s, daysLeft));
   root.append(renderWidgets(ui.data, ui));
 
   if (ui.pending?.length) {
@@ -83,22 +88,27 @@ function weekVolume(A, data, week) {
 }
 export function renderRings(A, ui, week) {
   const v = weekVolume(A, ui.data, week);
-  const order = [['swim', 46], ['bike', 34], ['run', 22]];
-  const C = r => 2 * Math.PI * r;
-  const rings = order.map(([sp, r]) => {
+  const R = 40, C = 2 * Math.PI * R;
+  const circle = (sp) => {
     const p = v[sp].plan ? v[sp].done / v[sp].plan : 0;
-    return `<circle cx="60" cy="60" r="${r}" fill="none" stroke="${COL[sp]}" stroke-opacity=".16" stroke-width="10"/>
-      <circle class="ring" data-p="${Math.min(1, p)}" cx="60" cy="60" r="${r}" fill="none" stroke="${COL[sp]}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${C(r).toFixed(2)}" stroke-dashoffset="${C(r).toFixed(2)}" transform="rotate(-90 60 60)"/>`;
-  }).join('');
-  const rows = order.map(([sp]) => {
-    const p = v[sp].plan ? v[sp].done / v[sp].plan : 0;
-    return `<div class="ring-row"><span class="ring-ico sport-${sp}">${sportIcon(sp)}</span><div class="ring-txt"><div class="ring-name">${SPORT_LABEL[sp]}</div><div class="ring-h"><b>${round(v[sp].done / 60, 1)}</b> / ${round(v[sp].plan / 60, 1)} h</div></div><div class="ring-pct" style="color:${COL[sp]}"><span data-count="${Math.round(p * 100)}">0</span>%</div></div>`;
-  }).join('');
-  const card = h(`<button class="card rings-card" aria-label="This week by discipline"><svg viewBox="0 0 120 120" class="rings">${rings}</svg><div class="ring-legend"><div class="card-title" style="margin-bottom:6px">This week</div>${rows}</div></button>`);
+    const id = 'rg-' + sp;
+    return `<div class="ring3">
+      <svg viewBox="0 0 100 100" class="ring3-svg">
+        <defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${COL[sp]}"/><stop offset="1" stop-color="${COL2[sp]}"/></linearGradient>
+        <filter id="${id}-g" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+        <circle cx="50" cy="50" r="${R}" fill="none" stroke="${COL[sp]}" stroke-opacity=".14" stroke-width="9"/>
+        <circle class="ring" data-p="${Math.min(1, p)}" cx="50" cy="50" r="${R}" fill="none" stroke="url(#${id})" stroke-width="9" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${C.toFixed(2)}" transform="rotate(-90 50 50)" filter="url(#${id}-g)"/>
+      </svg>
+      <div class="ring3-mid"><span class="ring3-ico" style="color:${COL[sp]}">${sportIcon(sp)}</span><span class="ring3-pct"><span data-count="${Math.round(p * 100)}">0</span>%</span></div>
+      <div class="ring3-lbl"><b>${round(v[sp].done / 60, 1)}</b><span> / ${round(v[sp].plan / 60, 1)} h</span></div>
+      <div class="ring3-name" style="color:${COL[sp]}">${SPORT_LABEL[sp]}</div>
+    </div>`;
+  };
+  const card = h(`<button class="card rings-card3" aria-label="This week by discipline"><div class="card-title" style="margin-bottom:10px">This week</div><div class="ring3-row">${['swim', 'bike', 'run'].map(circle).join('')}</div></button>`);
   card.onclick = () => ui.setTab('plan');
   requestAnimationFrame(() => requestAnimationFrame(() => card.querySelectorAll('.ring').forEach((c, i) => {
     const len = +c.getAttribute('stroke-dasharray');
-    c.style.transitionDelay = `${150 + i * 140}ms`;
+    c.style.transitionDelay = `${150 + i * 160}ms`;
     c.setAttribute('stroke-dashoffset', (len * (1 - +c.dataset.p)).toFixed(2));
   })));
   return card;
@@ -155,6 +165,7 @@ export function sessionCard(x, A, ui, opts = {}) {
     ${refBlock(x)}
     ${stepsHtml(x, s)}
     ${x.note ? `<p class="small muted" style="margin-top:12px">${esc(x.note)}</p>` : ''}
+    ${fuelLine(x)}
     ${x.kind !== 'race' ? `<div class="actions">
       <button class="btn secondary small" data-act="fit">⤓ .FIT</button>
       ${x.sport === 'bike' ? '<button class="btn secondary small" data-act="zwo">⤓ .ZWO</button>' : ''}
@@ -182,19 +193,58 @@ export function sessionCard(x, A, ui, opts = {}) {
   return card;
 }
 
+function fuelLine(x) {
+  if (x.kind === 'race' || x.sport === 'swim') return '';
+  const f = fueling(x.min, intensityOf(x));
+  if (!f.carbs[1]) return '';
+  return `<div class="fuel-line"><span>⛽</span><span><b>${f.carbs[0]}–${f.carbs[1]} g carbs/h</b> (${f.total[0]}–${f.total[1]} g total) · ${f.fluid[0]}–${f.fluid[1]} ml/h</span></div>`;
+}
+
+function carbCard(s, daysLeft) {
+  const c = carbLoading(s.weightKg, daysLeft, s.goalHours || 12);
+  const rows = c.plan.filter(p => p.d <= Math.min(daysLeft, 4)).map(p => `<div class="cl-row ${p.d <= 2 ? 'hot' : ''}"><div class="cl-d">${p.label}</div><div><b>${p.grams[0]}–${p.grams[1]} g</b> carbs <span class="faint">(${p.gkg[0]}–${p.gkg[1]} g/kg)</span><div class="small muted">${esc(p.text)}</div></div></div>`).join('');
+  return h(`<div class="card hero carb"><div class="row between"><div class="card-title" style="margin:0">Race fuelling · ${daysLeft} days to go</div><span class="pill accent">Taper mode</span></div>
+    <div class="stack" style="gap:8px;margin-top:10px">${rows}</div>
+    <div class="ref" style="margin-top:12px"><div class="small"><b>In the race:</b> bike ${c.race.bike[0]}–${c.race.bike[1]} g/h (≈${c.race.bikeTotal[0]}–${c.race.bikeTotal[1]} g), run ${c.race.run[0]}–${c.race.run[1]} g/h (≈${c.race.runTotal[0]}–${c.race.runTotal[1]} g). Only products you have trained with.</div></div>
+    <div class="small faint" style="margin-top:8px">Based on ${s.weightKg} kg body weight. General sports-nutrition ranges — adjust to what your gut tolerates.</div></div>`);
+}
+
+export function renderFuelSheet(ui) {
+  const st = ui.fuelCalc ||= { min: 120, intensity: 'easy', temp: '' };
+  const node = h(`<div class="detail"><div class="detail-head"><button class="icon-btn" data-close>✕</button><div class="detail-title">Fueling calculator</div></div>
+    <div class="form">
+      <div class="sl"><div class="row between small"><span class="muted">Duration</span><b data-v="min"></b></div><input type="range" min="30" max="420" step="15" data-k="min" value="${st.min}"></div>
+      <div class="field"><label>Intensity</label><div class="chips">${[['easy', 'Easy Z1–2'], ['steady', 'Steady / race pace'], ['hard', 'Hard intervals']].map(([k, l]) => `<button class="chip ${st.intensity === k ? 'on' : ''}" data-i="${k}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label>Temperature (optional, °C)</label><input type="number" data-k="temp" value="${st.temp}" placeholder="e.g. 26" style="max-width:140px"></div>
+    </div>
+    <div class="fuel-out"></div></div>`);
+  const out = node.querySelector('.fuel-out');
+  const upd = () => {
+    const f = fueling(st.min, st.intensity, st.temp === '' ? null : +st.temp);
+    node.querySelector('[data-v="min"]').textContent = fmtDur(st.min);
+    out.innerHTML = `<div class="fuel-big"><div><div class="big mono" style="color:var(--accent)">${f.carbs[0]}–${f.carbs[1]}</div><div class="small muted">g carbs per hour</div></div><div><div class="big mono">${f.total[0]}–${f.total[1]}</div><div class="small muted">g total</div></div></div>
+      <div class="dmetrics" style="margin-top:12px"><div class="metric"><div class="v">${f.fluid[0]}–${f.fluid[1]}</div><div class="k">ml fluid / h</div></div><div class="metric"><div class="v">${f.sodium[0]}–${f.sodium[1]}</div><div class="k">mg sodium / h</div></div></div>
+      <p class="small" style="margin-top:12px">${esc(f.example)}</p>${f.note ? `<p class="small muted" style="margin-top:6px">${esc(f.note)}</p>` : ''}
+      <p class="small faint" style="margin-top:10px">General ranges; build up high carb rates gradually in training.</p>`;
+  };
+  node.querySelector('[data-k="min"]').oninput = (e) => { st.min = +e.target.value; upd(); };
+  node.querySelector('[data-k="temp"]').oninput = (e) => { st.temp = e.target.value; upd(); };
+  node.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { st.intensity = b.dataset.i; node.querySelectorAll('[data-i]').forEach(x => x.classList.toggle('on', x === b)); upd(); });
+  node.querySelector('[data-close]').onclick = () => ui.closeSheet();
+  upd();
+  return node;
+}
+
 // ================================================================ PLAN
 export function renderPlan(A, ui) {
   const root = h('<div class="stack" style="gap:12px"></div>');
   const plan = A.plan;
   const counts = {}; plan.weeks.forEach(w => counts[w.phase] = (counts[w.phase] || 0) + 1);
   const order = ['base', 'build', 'peak', 'taper', 'race'];
-  const tmpl = plan.template.map(t => `${DOW[t.dow]} ${ROLES[t.role].label.replace(/^\w+ – /, '').toLowerCase()} ${ROLES[t.role].sport}`).join(' · ');
   root.append(h(`<div class="card"><div class="card-title">Road to ${esc(load().raceName)}</div>
     <div class="row between"><div class="big">${plan.totalWeeks + 1} <span class="small muted" style="font-weight:600">weeks</span></div><div class="small muted" style="text-align:right">${fmtDate(plan.anchor)} → ${fmtDate(plan.raceDate, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>
     <div class="phase-bar">${order.filter(p => counts[p]).map(p => `<span class="phase-${p}" style="flex:${counts[p]}"></span>`).join('')}</div>
     <div class="phase-legend">${order.filter(p => counts[p]).map(p => `<span><span class="dot phase-${p}" style="margin-right:4px"></span>${PHASES[p].label} ${counts[p]}w</span>`).join('')}</div>
-    <div class="ref" style="margin-top:12px"><div class="faint small">Your fixed week (change in Settings)</div><div class="small">${esc(tmpl)}</div></div>
-    <div class="small muted" style="margin-top:10px;line-height:1.5">Days stay fixed; duration, intensity and focus change. Swim builds to 3.8 km continuous, long run to 3 h (run/walk), long ride to 5½ h with strong blocks. If you train on another day, that session counts and the days swap automatically.</div>
   </div>`));
 
   const list = h('<div class="stack" style="gap:8px"></div>');
@@ -246,12 +296,10 @@ function sessionRow(x, done, todayIso) {
 // ================================================================ ACTIVITIES
 export function renderActivities(A, ui, data) {
   const root = h('<div class="stack" style="gap:10px"></div>');
-  const all = data?.activities || [];
+  const all = tagBricks(data?.activities || []);
   ui.actLimit ||= 25;
   const acts = all.slice(0, ui.actLimit);
-  if (!acts.length) { root.append(h('<div class="empty"><h2>No activities yet</h2><p>Sync with intervals.icu to see your sessions here, each with a coach summary.</p></div>')); return root; }
-  const s = load();
-  if (!s.anthropicKey) root.append(h('<div class="small muted" style="padding:0 4px">Summaries are rule-based. Add an Anthropic API key in Settings for AI coach feedback.</div>'));
+  if (!acts.length) { root.append(h('<div class="empty"><h2>No activities yet</h2><p>Sync with intervals.icu to see your sessions here.</p></div>')); return root; }
   const byAct = {}; for (const [sid, a] of Object.entries(A.matches)) byAct[a.id] = sid;
   const allSess = A.plan.weeks.flatMap(w => w.sessions);
   const plannedFor = (a) => { const sid = byAct[a.id]; return sid ? allSess.find(x => x.id === sid) || null : null; };
@@ -259,78 +307,35 @@ export function renderActivities(A, ui, data) {
   acts.forEach(a => {
     if (a.date !== lastDate) { root.append(h(`<div class="date-sep">${a.date === A.todayIso ? 'Today' : fmtDate(a.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div>`)); lastDate = a.date; }
     const planned = plannedFor(a);
-    const open = ui.openActs.has(a.id);
+    const sc = executionScore(a, planned);
     const movedNote = planned && planned.origDate !== a.date ? ` <span class="faint">(planned ${fmtDate(planned.origDate, { weekday: 'short' })})</span>` : '';
-    const card = h(`<div class="act">
+    const card = h(`<button class="act act-btn">
       <div class="act-head"><span class="ico sport-${a.sport}">${sportIcon(a.sport)}</span>
-        <div><div class="name">${esc(a.name)}${a.indoor ? ' <span class="pill" style="padding:0 6px;font-size:10px">indoor</span>' : ''}</div><div class="sub">${fmtDur(a.movingSec / 60)}${a.distanceM ? ' · ' + fmtKm(a.distanceM) : ''}${a.load ? ' · load ' + a.load : ''}${planned ? ` · <span class="muted">plan: ${esc(planned.title)}</span>${movedNote}` : (a.date < A.plan.anchor ? '' : ' · unplanned')}</div></div>
-        <div class="right">${summaryBadge(getSummary(a) || ruleSummary(a, { planned, wellness: A.wellness }))}</div></div>
-      ${open ? actDetail(a, planned) : ''}
-    </div>`);
-    card.querySelector('.act-head').onclick = () => { if (ui.openActs.has(a.id)) ui.openActs.delete(a.id); else ui.openActs.add(a.id); ui.keepScroll(); ui.rerender(); };
-    if (open) {
-      const box = card.querySelector('.summary');
+        <div style="min-width:0"><div class="name">${esc(a.name)}${a.brick ? ' <span class="pill accent tiny">Brick run</span>' : ''}${a.indoor ? ' <span class="pill tiny">indoor</span>' : ''}</div><div class="sub">${fmtDur(a.movingSec / 60)}${a.distanceM ? ' · ' + fmtKm(a.distanceM) : ''}${a.sport === 'run' && a.paceSecKm ? ' · ' + paceToStr(a.paceSecKm) + '/km' : ''}${a.avgHr ? ' · ♥ ' + Math.round(a.avgHr) : ''}${planned ? ` · <span class="muted">${esc(planned.title)}</span>${movedNote}` : ''}</div></div>
+        <div class="right badges">${sc ? scoreBadge(sc) : ''}${summaryBadge(getSummary(a) || ruleSummary(a, { planned, wellness: A.wellness }))}</div></div>
+    </button>`);
+    card.onclick = () => {
       const ctx = { planned, wellness: A.wellness, phase: (A.plan.weeks.find(w => a.date >= w.start && a.date <= w.end) || {}).phase, weeksLeft: A.goal.weeksLeft, compliance14: A.compliance.c14.ratio != null ? Math.round(A.compliance.c14.ratio * 100) : null };
-      const existing = getSummary(a);
-      if (existing && !(existing.source === 'rules' && s.anthropicKey && !existing.error)) fillSummary(box, existing);
-      else { box.innerHTML = '<div class="muted small">Analysing…</div>'; summarise(a, ctx).then(r => { fillSummary(box, r); const b = card.querySelector('.right'); if (b) b.innerHTML = summaryBadge(r); }); }
-      const redo = card.querySelector('[data-redo]'); if (redo) redo.onclick = (e) => { e.stopPropagation(); box.innerHTML = '<div class="muted small">Analysing…</div>'; summarise(a, ctx, { force: true }).then(r => fillSummary(box, r)); };
-    }
+      openActivity(a, ctx, ui);
+    };
     root.append(card);
   });
   if (all.length > acts.length) { const more = h(`<button class="btn secondary">Show more (${all.length - acts.length})</button>`); more.onclick = () => { ui.actLimit += 25; ui.keepScroll(); ui.rerender(); }; root.append(more); }
   return root;
 }
 function summaryBadge(sm) { if (!sm) return '<span class="pill">…</span>'; const m = { on: ['good', 'On target'], above: ['warn', 'Too hard'], below: ['bad', 'Under'], none: ['', 'No plan'] }[sm.verdict] || ['', '']; return `<span class="pill ${m[0]}">${m[1]}</span>`; }
-function actDetail(a, planned) {
-  const s = load();
-  const cells = [];
-  const realPower = a.deviceWatts !== false && (a.indoor || s.outdoorPower);
-  if (a.avgHr) cells.push(['Avg HR', Math.round(a.avgHr)]);
-  if (a.np && realPower) cells.push(['NP', a.np + ' W']);
-  if (a.paceSecKm) cells.push(['Pace', fmtPace(a.paceSecKm).replace('/km', '')]);
-  if (a.pace100) cells.push(['Pace', fmtPace100(a.pace100).replace('/100m', '')]);
-  if (a.speedKmh) cells.push(['Speed', round(a.speedKmh, 1) + ' km/h']);
-  if (a.intensity != null) cells.push(['IF', a.intensity + '%']);
-  if (a.elev) cells.push(['Climb', Math.round(a.elev) + ' m']);
-  if (a.rpe != null) cells.push(['RPE', a.rpe]);
-  if (a.decoupling != null) cells.push(['Drift', round(a.decoupling, 1) + '%']);
-  return `<div class="act-stats">${cells.slice(0, 8).map(c => `<div class="metric"><div class="v">${c[1]}</div><div class="k">${c[0]}</div></div>`).join('')}</div>
-    ${zoneBars(a, planned, realPower)}
-    ${planned ? `<div class="small muted" style="margin-top:10px">Planned: <b>${esc(planned.title)}</b> · ${fmtDur(planned.min)} · ${Math.round(planned.if * 100)}% · load ${planned.tss}</div>` : ''}
-    <div class="summary"></div>
-    <div class="row between" style="margin-top:8px"><button class="btn ghost small" data-redo>↻ Re-analyse</button><a class="small" href="https://intervals.icu/activities/${esc(a.id)}" target="_blank" rel="noopener">Open in intervals.icu ↗</a></div>`;
-}
-const ZCOL = ['#5d6678', '#4cc3ff', '#58e39a', '#ffb020', '#ff7a45', '#ff5c6c', '#c44cff'];
-function zoneBar(label, secs) {
-  if (!secs || !secs.some(Boolean)) return '';
-  const tot = secs.reduce((a, b) => a + (b || 0), 0);
-  const segs = secs.map((v, i) => v ? `<span style="flex:${v};background:${ZCOL[Math.min(i, 6)]}" title="Z${i + 1}: ${Math.round(v / 60)} min"></span>` : '').join('');
-  const top = secs.map((v, i) => [v, i]).filter(x => x[0] / tot >= 0.08).map(([v, i]) => `Z${i + 1} ${Math.round(v / tot * 100)}%`).join(' · ');
-  return `<div class="zrow"><div class="zl">${label}</div><div class="zbar">${segs}</div><div class="zt">${top}</div></div>`;
-}
-function zoneBars(a, planned, realPower) {
-  const rows = [];
-  if (a.powerZoneSecs && realPower) rows.push(zoneBar('Power', a.powerZoneSecs));
-  if (a.paceZoneSecs && a.sport !== 'bike') rows.push(zoneBar(a.sport === 'swim' ? 'Pace' : 'Pace (GAP)', a.paceZoneSecs));
-  if (a.hrZoneSecs) rows.push(zoneBar('Heart rate', a.hrZoneSecs));
-  if (planned) { const pd = plannedDist(planned.steps); if (pd) rows.push(zoneBar('Planned', pd.secs)); }
-  const out = rows.filter(Boolean);
-  return out.length ? `<div class="zones">${out.join('')}</div>` : '';
-}
-function fillSummary(box, r) {
-  const m = { on: ['good', 'On target'], above: ['warn', 'Harder than intended'], below: ['bad', 'Under-delivered'], none: ['', 'Not in the plan'] }[r.verdict] || ['', 'Summary'];
-  box.innerHTML = `<div class="verdict"><span class="dot" style="background:var(--${m[0] || 'muted'})"></span>${m[1]}</div><div>${esc(r.text)}</div><div class="adjust"><b>Change anything?</b> ${esc(r.adjust)}</div><div class="src">${r.source === 'ai' ? 'AI coach' : 'Rule-based'}${r.error ? ' · AI failed: ' + esc(r.error) : ''}</div>`;
-}
-
 // ================================================================ PROGRESS
 export function renderProgress(A, ui, data) {
   const root = h('<div class="stack" style="gap:12px"></div>');
+  const acts = data?.activities || [];
   root.append(simulatorCard(A, ui));
+  root.append(loadCard(acts, data?.wellness || []));
   root.append(pmcCard(A, data, ui));
+  root.append(tizCard(acts, ui));
+  root.append(splitCard(acts));
+  root.append(couplingCard(acts, ui));
+  root.append(easyPaceCard(data, ui));
   root.append(thresholdCard(data, ui));
-  const ep = easyPaceCard(data);
-  if (ep) root.append(ep);
   root.append(volumeCard(A, data));
   return root;
 }
@@ -477,14 +482,81 @@ function thresholdCard(data, ui) {
 }
 
 // ---- easy pace at Z2 HR (run focus 2) ---------------------------------------------
-function easyPaceCard(data) {
-  const runs = (data?.activities || []).filter(a => a.sport === 'run' && a.avgHr && (a.gapSecKm || a.paceSecKm) && a.movingSec >= 1500 && hrZoneOf('run', a.avgHr) <= 2);
-  if (runs.length < 3) return null;
-  const byWeek = {};
-  for (const a of runs) { const w = isoDate(startOfWeek(parseDate(a.date))); (byWeek[w] ||= []).push(a.gapSecKm || a.paceSecKm); }
-  const pts = Object.entries(byWeek).sort().map(([x, v]) => ({ x, y: round(v.sort((a, b) => a - b)[v.length >> 1]) }));
-  const card = h(`<div class="card"><div class="card-title">Easy pace at Z2 heart rate</div><div class="small muted" style="margin:-4px 0 8px">Your focus: from 7:00–7:30 toward 5:30–7:00/km at the same easy heart rate. Weekly median of runs with average HR in Z2.</div></div>`);
-  card.append(lineChart({ height: 170, invert: true, yFmt: v => paceToStr(v), bands: [{ y0: 330, y1: 420, color: 'rgba(88,227,154,.07)', label: 'target' }], series: [{ name: 'Easy pace', color: '#58e39a', pts, dots: true, fmt: v => paceToStr(v) + '/km' }] }));
+function easyPaceCard(data, ui) {
+  const pts = easyPaceSeries(data?.activities || [], 140);
+  const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Easy pace at Z2 heart rate</div>${ui.streamsLoading ? `<span class="pill">reading HR data… ${ui.streamsLoading}</span>` : ''}</div>
+    <div class="small muted" style="margin:6px 0 8px">Median pace of the parts of each run where your HR was in zone 2 (first 5 min and GPS drop-outs ignored, heat-corrected). Goal: 5:30–6:00/km.</div></div>`);
+  if (pts.length < 2) { card.append(h('<div class="muted small">Needs a few runs with heart rate.</div>')); return card; }
+  const roll = pts.map((p, i) => { const w = pts.slice(Math.max(0, i - 4), i + 1).map(x => x.y).sort((a, b) => a - b); return { x: p.x, y: w[w.length >> 1] }; });
+  const now = roll[roll.length - 1].y, then = roll.find(p => p.x >= isoDate(addDays(new Date(), -56)))?.y;
+  card.append(h(`<div class="row" style="gap:18px;margin-bottom:6px"><div><div class="big mono" style="font-size:28px;color:var(--run)">${paceToStr(now)}<span class="small muted">/km</span></div><div class="small muted">now (last 5 runs)</div></div>${then ? `<div><div style="font-size:20px;font-weight:800;color:${then - now > 0 ? 'var(--good)' : 'var(--muted)'}">${then - now > 0 ? '−' : '+'}${Math.abs(Math.round(then - now))} s</div><div class="small muted">vs 8 weeks ago</div></div>` : ''}</div>`));
+  card.append(lineChart({ height: 180, invert: true, today: A_TODAY(), yFmt: v => paceToStr(v), bands: [{ y0: 330, y1: 360, color: 'rgba(88,227,154,.09)', label: 'goal' }],
+    series: [{ name: 'Run', color: 'rgba(61,255,160,.55)', pts, dots: true, width: 0.01, fmt: v => paceToStr(v) + '/km' }, { name: 'Trend (5-run median)', color: '#3dffa0', pts: roll, width: 2.6, fmt: v => paceToStr(v) + '/km' }] }));
+  return card;
+}
+const A_TODAY = () => isoDate(new Date());
+
+// ---- load management: ramp rate, monotony/strain, grey zone ------------------------------
+function loadCard(acts, wellness) {
+  const rr = rampRate(wellness), mono = monotony(acts), gz = greyZone(acts);
+  const card = h(`<div class="card"><div class="card-title">Load management</div><div class="lm-grid"></div><div class="lm-extra"></div></div>`);
+  const grid = card.querySelector('.lm-grid');
+  if (rr) grid.append(h(`<div class="metric lm"><div class="row between"><div class="k">Ramp rate</div><span class="pill ${rr.level[0]} tiny">${rr.level[1]}</span></div><div class="v">${rr.value > 0 ? '+' : ''}${rr.value} <span class="small muted">CTL/wk</span></div><div class="small faint">≤5 optimal · 6–8 demanding · >8 risk</div></div>`));
+  grid.append(h(`<div class="metric lm"><div class="row between"><div class="k">Monotony (Foster)</div><span class="pill ${mono.high ? 'bad' : 'good'} tiny">${mono.high ? 'High' : 'OK'}</span></div><div class="v">${mono.monotony > 9 ? '—' : mono.monotony}</div><div class="small faint">strain ${mono.strain} · daily load ${mono.mean} ± ${mono.sd}</div></div>`));
+  const extra = card.querySelector('.lm-extra');
+  if (gz?.high) extra.append(h(`<div class="adjust-banner"><span>!</span><div><strong>High Zone-3 share (${Math.round(gz.share * 100)}% this week).</strong> Avoid the grey zone — keep base training strictly in Z1/Z2.</div></div>`));
+  if (mono.high) extra.append(h(`<div class="adjust-banner bad"><span>!</span><div><strong>Training monotony ${mono.monotony} (&gt; 2.0).</strong> Every day looks the same — make easy days easier and hard days harder, or add a real rest day.</div></div>`));
+  if (rr && rr.value > 8) extra.append(h(`<div class="adjust-banner bad"><span>!</span><div><strong>Fitness rising ${rr.value} CTL/week.</strong> High risk of injury or overtraining — the plan will trim volume next week.</div></div>`));
+  if (rr?.series?.length > 2) { const c = lineChart({ height: 120, zero: true, bands: [{ y0: 5, y1: 8, color: 'rgba(255,176,32,.08)' }, { y0: 8, y1: 30, color: 'rgba(255,92,108,.08)' }], series: [{ name: 'Ramp (CTL/wk)', color: '#38c6ff', pts: rr.series, dots: true, fmt: v => (v > 0 ? '+' : '') + v }] }); extra.append(c); }
+  const days = mono.days;
+  extra.append(barChart({ height: 110, cats: days.map(d => ({ label: fmtDate(d.d, { weekday: 'short' }).slice(0, 2), title: fmtDate(d.d) })), yFmt: v => String(Math.round(v)), series: [{ name: 'Load', color: '#ff6a3d', values: days.map(d => d.load) }] }));
+  return card;
+}
+
+// ---- time in zone (weekly stacked) ----------------------------------------------------
+function tizCard(acts, ui) {
+  const kind = ui.tizKind || 'hr';
+  const weeks = weeklyTiz(acts, 10, kind);
+  const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Time in zone · weekly</div><div class="chips">${[['hr', 'Heart rate'], ['power', 'Power']].map(([k, l]) => `<button class="chip ${kind === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('')}</div></div><div style="margin-top:10px"></div></div>`);
+  card.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { ui.tizKind = b.dataset.k; ui.keepScroll(); ui.rerender(); });
+  const cols = ['#5d6678', '#38c6ff', '#3dffa0', '#ffb020', '#ff5c6c'];
+  card.lastElementChild.append(barChart({ stacked: true, height: 190, yFmt: v => `${round(v, 1)} h`,
+    cats: weeks.map(w => ({ label: fmtDate(w.week, { day: 'numeric', month: 'numeric' }), title: `Week of ${fmtDate(w.week, { day: 'numeric', month: 'short' })}` })),
+    series: [0, 1, 2, 3, 4].map(i => ({ name: `Z${i + 1}`, color: cols[i], values: weeks.map(w => w.z[i]) })) }));
+  const cur = weeks[weeks.length - 1];
+  if (cur.total > 0) card.append(h(`<div class="small muted" style="margin-top:6px">This week: ${[0, 1, 2, 3, 4].map(i => `<span style="color:${cols[i]}">Z${i + 1} ${Math.round(cur.z[i] / cur.total * 100)}%</span>`).join(' · ')}${kind === 'power' ? ' (indoor rides with real power)' : ''}</div>`));
+  return card;
+}
+
+// ---- discipline split ------------------------------------------------------------------
+function splitCard(acts) {
+  const d = disciplineSplit(acts, 28);
+  const bar = (share, label) => `<div class="split-row"><div class="small muted" style="width:44px">${label}</div><div class="split-bar">${['swim', 'bike', 'run'].map(sp => `<span style="flex:${Math.max(0.001, share[sp])};background:${COL[sp]}" title="${SPORT_LABEL[sp]} ${Math.round(share[sp] * 100)}%"></span>`).join('')}</div></div>`;
+  const tgt = `<div class="split-row"><div class="small muted" style="width:44px">Target</div><div class="split-bar target">${['swim', 'bike', 'run'].map(sp => `<span style="flex:${(IM_TARGET[sp][0] + IM_TARGET[sp][1]) / 2};background:${COL[sp]}"></span>`).join('')}</div></div>`;
+  return h(`<div class="card"><div class="card-title">Discipline split · last 4 weeks</div>
+    ${bar(d.share, 'Time')}${bar(d.loadShare, 'Load')}${tgt}
+    <div class="row small" style="gap:14px;flex-wrap:wrap;margin-top:8px">${['swim', 'bike', 'run'].map(sp => `<span><span class="dot" style="background:${COL[sp]}"></span> ${SPORT_LABEL[sp]} <b>${Math.round(d.share[sp] * 100)}%</b> <span class="faint">${round(d.hours[sp], 1)} h · target ${Math.round(IM_TARGET[sp][0] * 100)}–${Math.round(IM_TARGET[sp][1] * 100)}%</span></span>`).join('')}</div>
+    ${d.recs.length ? `<div class="stack small" style="margin-top:10px;gap:6px">${d.recs.map(r => `<div class="row" style="align-items:flex-start;gap:8px"><span class="dot" style="margin-top:5px;background:var(--warn)"></span><span class="muted">${esc(r)}</span></div>`).join('')}</div>` : '<div class="small muted" style="margin-top:10px">Balanced for Ironman.</div>'}
+  </div>`);
+}
+
+// ---- indoor / outdoor FTP coupling -------------------------------------------------------
+function couplingCard(acts, ui) {
+  const s = load();
+  const c = ftpCoupling(acts, s);
+  const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Bike FTP · indoor ↔ outdoor</div><button class="btn ghost small" data-recal>Recalibrate</button></div></div>`);
+  card.querySelector('[data-recal]').onclick = () => { save({ ftpCoupling: null }); ui.toast('Recalibrating outdoor/indoor ratio'); ui.invalidate(); };
+  if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs at least two outdoor rides ≥ 1 h with heart rate (or an outdoor FTP in Settings) to calibrate.</div>`)); return card; }
+  const pct = Math.round((c.ratio - 1) * 100);
+  card.append(h(`<div><div class="dmetrics" style="margin-top:10px">
+      <div class="metric"><div class="v" style="color:var(--bike)">${s.ftp} W</div><div class="k">Indoor FTP</div></div>
+      <div class="metric"><div class="v">${c.outdoorNow} W</div><div class="k">Outdoor FTP (${pct >= 0 ? '+' : ''}${pct}%)</div></div>
+      <div class="metric"><div class="v" style="color:var(--accent)">${c.target} W</div><div class="k">Race target outdoor</div></div>
+    </div>
+    <div style="margin-top:14px"><div class="row between small"><span>Indoor target to reach ${c.target} W outdoors: <b>${c.indoorTarget} W</b></span><b>${Math.round(c.progress * 100)}%</b></div>
+      <div class="progress glow"><span style="width:${Math.min(100, c.progress * 100)}%"></span></div>
+      <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Ratio calibrated ${c.calib.date ? fmtDate(c.calib.date, { day: 'numeric', month: 'short' }) + ' ' : ''}from ${esc(c.calib.source)}${c.est ? ` · current outdoor estimate from ${c.est.n} rides: ${c.est.ftp} W (avg ${c.est.avgP} W on those rides)` : ''}. As indoor FTP rises, the outdoor value scales with the same ratio.</div></div>
+    ${c.ratio > 1.4 && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting) or with tailwind. If it looks wrong, enter your outdoor FTP baseline in Settings.</div></div>` : ''}</div>`));
   return card;
 }
 
@@ -521,7 +593,8 @@ export function renderSettings(ui, onSave) {
       <div class="card-title" style="margin-top:8px">Bike</div>
       <div class="grid2">
         <div class="field"><label>Indoor FTP (trainer), W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">Your indoor Z2 = ${Math.round(s.ftp * 0.56)}–${Math.round(s.ftp * 0.75)} W.</div></div>
-        <div class="field"><label>Outdoor FTP, W (power meter only)</label><input name="ftpOutdoor" type="number" min="60" max="500" value="${s.ftpOutdoor || ''}" placeholder="—"></div>
+        <div class="field"><label>Outdoor FTP baseline, W</label><input name="ftpOutdoor" type="number" min="60" max="500" value="${s.ftpOutdoor || ''}" placeholder="auto"><div class="hint">Blank = estimated from speed + HR. Sets the indoor↔outdoor ratio.</div></div>
+        <div class="field"><label>Race target outdoor FTP, W</label><input name="raceTargetW" type="number" min="100" max="500" value="${s.raceTargetW || 230}"></div>
       </div>
       <div class="field"><label class="toggle"><input type="checkbox" name="outdoorPower" ${s.outdoorPower ? 'checked' : ''}> I have a power meter on my outdoor bike</label><div class="hint">Off: outdoor rides are prescribed and judged by heart rate; estimated (Strava) watts are ignored.</div></div>
 
@@ -539,6 +612,11 @@ export function renderSettings(ui, onSave) {
         <option value="intervals" ${s.thresholdSource === 'intervals' ? 'selected' : ''}>Always use my intervals.icu sport settings</option>
         <option value="manual" ${s.thresholdSource === 'manual' ? 'selected' : ''}>Manual only</option></select>
         <div class="hint">A value you change here is kept for 4 weeks, then estimates may adjust it again (max ±5% per update). ${zoneInfo()}</div></div>
+
+      <div class="card-title" style="margin-top:8px">Heart-rate zones</div>
+      <div class="field"><label class="toggle"><input type="checkbox" name="hrManual" ${s.manualHr?.enabled ? 'checked' : ''}> Use my own HR zones (instead of intervals.icu)</label>
+        <div class="hrz">${[1, 2, 3, 4, 5].map(i => `<div class="field"><label>Z${i} up to</label><input name="hrz${i}" type="number" min="60" max="230" value="${s.manualHr?.tops?.[i - 1] ?? ''}" placeholder="${getZoneModel().run.hr?.[i - 1] ?? ''}"></div>`).join('')}<div class="field"><label>LTHR</label><input name="hrLthr" type="number" min="100" max="220" value="${s.manualHr?.lthr ?? ''}" placeholder="${getZoneModel().run.lthr ?? ''}"></div></div>
+        <div class="hint">Upper limit (bpm) of each zone; Z5 = max HR. Applied to all workout targets, analysis and charts.</div></div>
 
       <div class="card-title" style="margin-top:8px">Weekly schedule (fixed days)</div>
       <div class="field"><div class="hint" style="margin:0 0 8px">Up to two sessions per day. Durations and intensity are planned for you; the days stay as set here.</div>${dayRows}</div>
@@ -582,6 +660,11 @@ export function renderSettings(ui, onSave) {
     };
     if (patch.athleteId && /^\d+$/.test(patch.athleteId)) patch.athleteId = 'i' + patch.athleteId;
     // manual threshold edits: keep them for 4 weeks and log them
+    const tops = [1, 2, 3, 4, 5].map(i => +fd.get('hrz' + i) || null);
+    patch.manualHr = { enabled: fd.get('hrManual') === 'on' && tops.every(Boolean), tops: tops.every(Boolean) ? tops : (s.manualHr?.tops || null), lthr: +fd.get('hrLthr') || null };
+    if (fd.get('hrManual') === 'on' && !tops.every(Boolean)) ui.toast('Fill in all five zone limits to use manual HR zones', true);
+    patch.raceTargetW = +fd.get('raceTargetW') || 230;
+    if (!patch.outdoorPower && patch.ftpOutdoor !== s.ftpOutdoor) patch.ftpCoupling = patch.ftpOutdoor ? { ratio: patch.ftpOutdoor / patch.ftp, outdoor: patch.ftpOutdoor, indoor: patch.ftp, date: today, source: 'your outdoor FTP' } : null;
     const holds = { ...(s.holds || {}) }, log = [...(s.thresholdLog || [])];
     for (const k of ['ftp', 'ftpOutdoor', 'runThreshold', 'css']) {
       if (patch[k] && patch[k] !== s[k]) { holds[k] = isoDate(addDays(new Date(), 28)); log.unshift({ date: today, field: k, from: s[k], to: patch[k], source: 'you, in Settings' }); }

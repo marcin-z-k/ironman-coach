@@ -1,6 +1,7 @@
 // Athlete zone model built from intervals.icu sport settings (HR zones in bpm, power zones in
 // % of FTP, pace zones in % of threshold speed). Falls back to intervals.icu's default model.
 import { paceToStr } from './util.js';
+import { load } from './store.js';
 
 const DEF_POWER = [55, 75, 90, 105, 120, 150, 999];
 const DEF_PACE = [77.5, 87.7, 94.3, 100, 103.4, 111.5, 999];
@@ -32,6 +33,12 @@ export function buildZoneModel(athlete) {
     if (sport === 'bike' && ss.ftp) z.ftp = Math.round(ss.ftp);
     if (sport !== 'bike' && ss.threshold_pace) z.thresholdSpeed = ss.threshold_pace; // m/s
     z.source = 'intervals';
+  }
+  // Manual HR zones from Settings override everything (tops of Z1..Z5 in bpm)
+  const man = load().manualHr;
+  if (man?.enabled && Array.isArray(man.tops) && man.tops.length === 5 && man.tops.every(v => v > 40)) {
+    for (const sp of ['run', 'bike']) { m[sp].hr = [...man.tops]; m[sp].lthr = man.lthr || man.tops[3]; m[sp].maxHr = man.tops[4]; m[sp].hrManual = true; }
+    return m;
   }
   // If only one sport has HR zones, reuse them (better than nothing) but flag it.
   const withHr = ['run', 'bike'].find(s => m[s].hr);

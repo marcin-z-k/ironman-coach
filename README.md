@@ -13,6 +13,12 @@ Adaptive sub-12 Ironman training app that runs entirely in your browser and read
 - **Indoor vs outdoor bike.** Indoor FTP drives trainer workouts and is estimated from indoor rides with real power only; estimated (Strava) outdoor watts are ignored. Values you type in Settings are kept for 4 weeks.
 - **Home:** Stamina-style rings (hours done / planned per discipline this week), health widgets (readiness, sleep, fitness, fatigue, form, VO2max, HRV, resting HR) with trend pages.
 - **Progress:** interactive race simulator (FTP, CSS, run threshold, continuous swim/run distance, wetsuit) using a model with fade — swim stops beyond your continuous distance, run/walk beyond your continuous run, bike from your real long-ride speed; PMC chart projected to race day; threshold estimates; easy pace at Z2 HR; weekly hours. Every chart shows exact values on hover/tap.
+- **Activity detail:** tap any activity for a slide-over with key metrics, route map, synced pace/HR/cadence/elevation charts, execution score (0–100), aerobic decoupling (stable < 5% · moderate 5–10% · high > 10%), brick-run detection with first-3-km split, EnviroNorm heat correction (enter °C), time in zones and the coach summary.
+- **Load management:** ramp rate (≤5 / 6–8 / >8 CTL per week), Foster monotony & strain, grey-zone alert (Z3 > 25%), weekly time-in-zone (HR or power), discipline split vs Ironman targets.
+- **Indoor ↔ outdoor FTP:** outdoor FTP estimated from speed, climbing and HR (no power meter), ratio to indoor FTP, indoor target needed for the 230 W outdoor race goal.
+- **Easy pace at Z2 HR:** median pace of the stream samples in your HR zone 2, per run (incl. today), GPS outliers dropped.
+- **Fueling:** calculator in the top bar (carbs/fluid/sodium per hour); carb-loading plan on Today in the last 14 days before the race.
+- **Manual HR zones** in Settings override intervals.icu zones everywhere.
 - **Workout export:** .FIT (Garmin/Wahoo), .ZWO (Zwift) and "Send to device" (writes the workout to your intervals.icu calendar, which forwards it to connected devices).
 - **Login:** works with your browser's password manager, backed up in IndexedDB, auto sign-in where supported.
 

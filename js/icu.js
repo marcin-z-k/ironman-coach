@@ -66,6 +66,12 @@ export function sportOf(type = '') {
   return 'other';
 }
 
+// Plausible ranges; anything else is a pause / GPS error and is ignored.
+export function sanePace(sport, secKm) {
+  if (secKm == null || !isFinite(secKm)) return null;
+  return sport === 'run' ? (secKm >= 150 && secKm <= 840 ? secKm : null) : secKm;
+}
+
 export function normalizeActivity(a) {
   if (!a || !a.start_date_local) return null;
   const sport = sportOf(a.type);
@@ -99,14 +105,21 @@ export function normalizeActivity(a) {
     indoor: !!a.trainer || /virtual/i.test(a.type || ''),
     deviceWatts: a.device_watts ?? null,               // false = estimated (e.g. Strava) power
     vi: a.icu_variability_index ?? null,
-    gapSecKm: a.gap ? a.gap * 1000 : null,                        // gap is sec/m
+    // intervals.icu 'gap' is a SPEED in m/s (older docs say sec/m) — handle both, drop GPS nonsense
+    gapSecKm: sanePace(sport, a.gap ? (a.gap > 1 ? 1000 / a.gap : a.gap * 1000) : null),
+    elapsedSec: a.elapsed_time ?? moving,
+    calories: a.calories ?? null,
+    avgCadence: a.average_cadence ?? null,
+    avgTemp: a.average_temp ?? null,
+    location: a.location || a.locality || null,
+    streamTypes: a.stream_types || null,
     hrZoneSecs: Array.isArray(a.icu_hr_zone_times) ? a.icu_hr_zone_times : null,
     powerZoneSecs: Array.isArray(a.icu_zone_times) ? a.icu_zone_times.filter(z => /^Z\d$/.test(z.id)).sort((x, y) => x.id.localeCompare(y.id)).map(z => z.secs) : null,
     paceZoneSecs: Array.isArray(a.gap_zone_times) && a.use_gap_zone_times !== false && a.gap_zone_times.some(Boolean) ? a.gap_zone_times : (Array.isArray(a.pace_zone_times) ? a.pace_zone_times : null),
     lthr: a.lthr ?? null,
     efficiency: a.icu_efficiency_factor ?? null,
     description: a.description || '',
-    paceSecKm: sport === 'run' && moving && dist ? moving / (dist / 1000) : null,
+    paceSecKm: sanePace(sport, sport === 'run' && moving && dist ? moving / (dist / 1000) : null),
     pace100: sport === 'swim' && moving && dist ? moving / (dist / 100) : null,
     speedKmh: sport === 'bike' && moving && dist ? (dist / 1000) / (moving / 3600) : null,
   };
@@ -159,5 +172,15 @@ export async function pushEvents(events) {
   if (s.corsProxy) url = s.corsProxy + encodeURIComponent(url);
   const res = await fetch(url, { method: 'POST', headers: { Authorization: authHeader(s.apiKey), 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(events) });
   if (!res.ok) { let m = `intervals.icu ${res.status}`; try { const j = await res.json(); m += ' ' + (j.error || j.message || ''); } catch {} const e = new Error(m.trim()); e.status = res.status; throw e; }
+  return res.json();
+}
+
+// Second-by-second streams for one activity.
+export async function fetchStreams(id) {
+  const s = load();
+  let url = `${BASE}/activity/${encodeURIComponent(id)}/streams?types=time,heartrate,velocity_smooth,cadence,altitude,distance,latlng,watts,temp`;
+  if (s.corsProxy) url = s.corsProxy + encodeURIComponent(url);
+  const res = await fetch(url, { headers: { Authorization: authHeader(s.apiKey), Accept: 'application/json' } });
+  if (!res.ok) { const e = new Error(`streams ${res.status}`); e.status = res.status; throw e; }
   return res.json();
 }

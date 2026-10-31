@@ -30,7 +30,7 @@ export function demoActivities(days = 120) {
     if (thisWeek && dow === 2) dow = 3;        // Tue: did the Wednesday run
     else if (thisWeek && dow === 3) dow = 2;   // Wed: did the Tuesday swim
     const prog = (days - d) / days;
-    const mk = (type, name, min, extra) => out.push({ id: `${iso}-${type}-${out.length}`, type, name, start_date_local: `${iso}T${String(6 + Math.floor(r() * 12)).padStart(2, '0')}:${String(10 + out.length % 40).padStart(2, '0')}:00`, moving_time: Math.round(min * 60), ...extra });
+    const mk = (type, name, min, extra) => out.push({ id: `${iso}-${type}-${out.length}`, type, name, start_date_local: extra.at ? `${iso}T${extra.at}:00` : `${iso}T${String(6 + Math.floor(r() * 12)).padStart(2, '0')}:${String(10 + out.length % 40).padStart(2, '0')}:00`, moving_time: Math.round(min * 60), elapsed_time: Math.round(min * 63), average_cadence: type === 'Run' ? 83 + Math.round(r() * 4) : /Ride/.test(type) ? 84 + Math.round(r() * 6) : null, calories: Math.round(min * (type === 'Swim' ? 9 : 11)), total_elevation_gain: type === 'Ride' ? Math.round(min * 2.2) : type === 'Run' ? Math.round(min * 0.8) : 0, ...extra });
     if (!thisWeek && r() < 0.1) continue;
     if (d === 23) { mk('Run', 'Dresden 10k', 61, { distance: 10000, race: true, average_heartrate: 171, icu_training_load: 80, icu_intensity: 98, pace_zone_times: zt(61, [0, 1, 4, 30, 19, 0, 0]), icu_hr_zone_times: zt(61, [0, 1, 3, 20, 30, 0, 0]) }); continue; }
     switch (dow) {
@@ -39,9 +39,9 @@ export function demoActivities(days = 120) {
       case 4: { const m = 45 + r() * 8; mk('Swim', 'Swim 2k', m, { distance: 2000, icu_training_load: 38, icu_intensity: 70 }); break; }
       case 5: {
         const m = 60;
-        mk('VirtualRide', 'Zwift sweet spot', m, { trainer: true, device_watts: true, distance: 30000, icu_training_load: 68 + r() * 10, icu_intensity: 80 + r() * 6, icu_weighted_avg_watts: Math.round(118 + prog * 8 + r() * 6), average_heartrate: 146 + r() * 6, icu_eftp: Math.round(146 + prog * 8 + r() * 3), icu_pm_ftp_watts: Math.round(150 + prog * 8 + r() * 5), icu_variability_index: 1.07, icu_zone_times: pz(m, [8, 18, 10, 22, 2, 0, 0]), icu_hr_zone_times: zt(m, [10, 18, 16, 14, 2, 0, 0]) });
+        mk('VirtualRide', 'Zwift sweet spot', m, { at: '17:00', trainer: true, device_watts: true, distance: 30000, icu_training_load: 68 + r() * 10, icu_intensity: 80 + r() * 6, icu_weighted_avg_watts: Math.round(118 + prog * 8 + r() * 6), average_heartrate: 146 + r() * 6, icu_eftp: Math.round(146 + prog * 8 + r() * 3), icu_pm_ftp_watts: Math.round(150 + prog * 8 + r() * 5), icu_variability_index: 1.07, icu_zone_times: pz(m, [8, 18, 10, 22, 2, 0, 0]), icu_hr_zone_times: zt(m, [10, 18, 16, 14, 2, 0, 0]) });
         const rm = 28 + r() * 6; const pace = 440 - prog * 20 + r() * 20;
-        mk('Run', 'Brick run', rm, { distance: Math.round(rm * 60 / pace * 1000), gap: pace / 1000, icu_training_load: 28, icu_intensity: 70, average_heartrate: 148 + r() * 5, pace_zone_times: zt(rm, [6, 20, 4, 0, 0, 0, 0]), icu_hr_zone_times: zt(rm, [4, 18, 8, 0, 0, 0, 0]) });
+        mk('Run', 'Brick run', rm, { at: '18:07', distance: Math.round(rm * 60 / pace * 1000), gap: pace / 1000, icu_training_load: 28, icu_intensity: 70, average_heartrate: 148 + r() * 5, pace_zone_times: zt(rm, [6, 20, 4, 0, 0, 0, 0]), icu_hr_zone_times: zt(rm, [4, 18, 8, 0, 0, 0, 0]) });
         break;
       }
       case 6: { const m = 88 + r() * 8; const pace = 435 - prog * 18 + r() * 15; const fast = r() < 0.3; mk('Run', 'Long run', m, { distance: Math.round(m * 60 / pace * 1000), gap: pace / 1000 * 0.98, icu_training_load: 85 + r() * 15, icu_intensity: 70 + r() * 5, average_heartrate: fast ? 156 : 145 + r() * 6, icu_rpe: 6, pace_zone_times: zt(m, [12, 62, 12, 2, 0, 0, 0]), icu_hr_zone_times: fast ? zt(m, [6, 40, 34, 8, 0, 0, 0]) : zt(m, [10, 62, 14, 2, 0, 0, 0]) }); break; }
