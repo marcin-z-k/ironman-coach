@@ -3,6 +3,7 @@
 import { load, getCache, setCache } from './store.js';
 import { fmtDur, fmtPace, fmtPace100, fmtKm, round, paceToStr } from './util.js';
 import { zones } from './plan.js';
+import { stepsText } from './workouts.js';
 import { collapse, plannedDist, hrRangeStr, getZoneModel } from './zones.js';
 
 function cacheKey(a) { return `sum:${a.id}`; }
@@ -30,7 +31,8 @@ export async function summarise(a, ctx, { force = false } = {}) {
 // run: pace (GAP) zones; HR zones always as the physiological check.
 export function zoneIntensity(a, planned) {
   const pd = plannedDist(planned.steps);
-  const primary = a.sport === 'bike' ? a.powerZoneSecs : a.sport === 'run' ? a.paceZoneSecs : null;
+  const realPower = a.sport === 'bike' && a.deviceWatts !== false && (a.indoor || load().outdoorPower);
+  const primary = a.sport === 'bike' ? (realPower ? a.powerZoneSecs : null) : a.sport === 'run' ? a.paceZoneSecs : null;
   const pz = collapse(primary), hz = collapse(a.hrZoneSecs);
   const act = pz || hz;
   if (!pd || !act) return null;
@@ -90,8 +92,11 @@ export function ruleSummary(a, ctx) {
   }
 
   if (a.sport === 'bike') {
-    if (a.np) lines.push(`NP ${a.np} W = ${Math.round(a.np / s.ftp * 100)}% of FTP (IM target ${z.bike.imW} W).`);
-    if (a.eftp && a.eftp > s.ftp + 3) { lines.push(`eFTP estimate ${a.eftp} W — above your set FTP ${s.ftp} W.`); adjust = (load().thresholdSource || 'auto') === 'auto' ? `The app will raise FTP toward ${a.eftp} W automatically (max 5% per update).` : `Consider raising FTP to ${a.eftp} W so zones and targets move up.`; }
+    const realPower = a.deviceWatts !== false && (a.indoor || s.outdoorPower);
+    if (a.np && realPower) lines.push(`NP ${a.np} W = ${Math.round(a.np / (a.indoor ? s.ftp : (s.ftpOutdoor || s.ftp)) * 100)}% of your ${a.indoor ? 'indoor' : 'outdoor'} FTP.`);
+    else if (a.np && !realPower) lines.push(`Power ${a.np} W is estimated (no power meter) — judged by heart rate instead.`);
+    if (!a.indoor && a.speedKmh && a.movingSec > 2.5 * 3600) lines.push(`Long-ride speed ${round(a.speedKmh, 1)} km/h — the number your bike split is projected from.`);
+    if (a.indoor && realPower && a.eftp && a.eftp > s.ftp + 3) { lines.push(`eFTP estimate ${a.eftp} W — above your set FTP ${s.ftp} W.`); adjust = (load().thresholdSource || 'auto') === 'auto' ? `The app will raise FTP toward ${a.eftp} W automatically (max 5% per update).` : `Consider raising FTP to ${a.eftp} W so zones and targets move up.`; }
     if (a.decoupling != null && a.decoupling > 7) lines.push(`HR drift ${round(a.decoupling, 1)}% — aerobic durability still developing.`);
   }
   if (a.sport === 'run' && a.paceSecKm) {
@@ -127,7 +132,7 @@ async function aiSummary(a, ctx, rules) {
       elevation_m: a.elev, rpe: a.rpe, feel: a.feel, hr_decoupling_pct: a.decoupling,
       time_in_zones_pct: { hr: pctArr(a.hrZoneSecs), power: pctArr(a.powerZoneSecs), pace: pctArr(a.paceZoneSecs) }, gap_pace_per_km: a.gapSecKm ? paceToStr(a.gapSecKm) : null, activity_power_model_ftp: a.pmFtp, athlete_notes: a.description?.slice(0, 400) || null,
     },
-    planned_session: planned ? { title: planned.title, purpose: planned.note || planned.kind, duration_min: planned.min, target_if: planned.if, key_session: planned.key, steps: planned.steps.map(x => `${x.min} min Z${x.zone} ${x.text}`),
+    planned_session: planned ? { title: planned.title, purpose: planned.note || planned.kind, duration_min: planned.min, target_if: planned.if, key_session: planned.key, steps: stepsText(planned.steps, { s, sport: planned.sport, indoor: planned.indoor }), focus: planned.focus || null,
       based_on_previous: planned.ref && planned.ref.id !== a.id ? { date: planned.ref.date, name: planned.ref.name, duration_min: planned.ref.min, np: planned.ref.np, pace_per_km: planned.ref.paceSecKm ? paceToStr(planned.ref.paceSecKm) : null, intensity_pct: planned.ref.intensity } : null } : null,
     athlete: { zones: zoneSummary(), ftp_w: s.ftp, run_threshold_pace: paceToStr(s.runThreshold) + '/km', swim_css: paceToStr(s.css) + '/100m', weekly_hours: s.weeklyHours,
       ironman_targets: { bike_w: z.bike.imW, run_pace: paceToStr(z.run.imPace) + '/km', swim_pace: paceToStr(z.swim.imPace) + '/100m' } },

@@ -26,11 +26,12 @@ function windowActs(acts, endIso, days) {
 }
 
 export function estimateBike(acts, cur, endIso, days = 42) {
-  const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200);
+  // INDOOR FTP: only indoor rides with real (device) power — outdoor estimated watts are not comparable
+  const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200 && a.indoor && a.deviceWatts !== false);
   const methods = [];
   // 1) intervals.icu rolling eFTP — most recent value
   const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
-  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP', value: withE[0].eftp, weight: 0.45, detail: `latest, ${withE[0].date}` });
+  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP (indoor rides)', value: withE[0].eftp, weight: 0.45, detail: `latest, ${withE[0].date}` });
   // 2) per-activity power-model FTP — median of the top 3 (only hard rides produce a meaningful model)
   const pm = rides.filter(a => a.pmFtp && a.pmFtp > 50).map(a => a.pmFtp).sort((a, b) => b - a).slice(0, 3);
   if (pm.length) methods.push({ key: 'pm', label: 'Power model (best rides)', value: Math.round(median(pm)), weight: pm.length >= 2 ? 0.3 : 0.15, detail: `${pm.length} ride${pm.length > 1 ? 's' : ''}` });
@@ -127,11 +128,13 @@ export function estimateTrend(acts, s, endIso, weeks = 12) {
 }
 
 // Decide what to apply. Max ±5% per update (smoothing); ignore tiny changes.
-export function proposeUpdates(est, s) {
+export function proposeUpdates(est, s, todayIso = new Date().toISOString().slice(0, 10)) {
   const out = [];
+  const held = k => s.holds && s.holds[k] && s.holds[k] >= todayIso;
   const minDelta = { ftp: 3, runThreshold: 3, css: 2 };
   for (const k of ['ftp', 'runThreshold', 'css']) {
     const e = est[k];
+    if (held(k)) continue;
     if (!e.value || e.confidence === 'none' || e.confidence === 'low') continue;
     const curV = s[k];
     const capped = clamp(e.value, curV * 0.95, curV * 1.05);

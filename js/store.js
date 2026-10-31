@@ -11,7 +11,14 @@ export const DEFAULTS = {
   raceName: 'Ironman 2027',
   goalHours: 12,
   weeklyHours: 9.5,
-  ftp: 180,                 // W
+  ftp: 150,                 // W — INDOOR (trainer) FTP, used for indoor power targets
+  ftpOutdoor: null,         // W — outdoor FTP (only meaningful with an outdoor power meter)
+  outdoorPower: false,      // power meter on the outdoor bike?
+  swimContinuous: 600,      // m you can swim without stopping (race predictor)
+  runContinuous: null,      // km you can run without walking (null = from longest run)
+  weekTemplate: null,       // null = default fixed week
+  moves: {},                // manual day swaps {sessionId: date}
+  holds: {},                // {field: isoDate} manual threshold edits protected until date
   runThreshold: 340,        // s/km  (5:40)
   css: 110,                 // s/100m (1:50)
   weightKg: 75,
@@ -40,6 +47,7 @@ export function load() {
 export function save(patch = {}) {
   state = { ...load(), ...patch };
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+  if ('athleteId' in patch || 'apiKey' in patch) backupCredentials();
   return state;
 }
 
@@ -56,8 +64,53 @@ export function setCache(name, value) {
   try { localStorage.setItem(`${KEY}:${name}`, JSON.stringify(value)); } catch {}
 }
 export function clearAll() {
+  idbSet('cred', null);
   try {
     Object.keys(localStorage).filter(k => k.startsWith(KEY)).forEach(k => localStorage.removeItem(k));
   } catch {}
   state = null;
+}
+
+// ---- credential persistence --------------------------------------------------
+// localStorage can be wiped (Safari's 7-day rule, "clear on close", home-screen app vs browser).
+// Credentials are mirrored into IndexedDB and the browser is asked for persistent storage.
+const IDB = 'ironman-coach', STORE = 'kv';
+function idb() {
+  return new Promise((res, rej) => {
+    try { const r = indexedDB.open(IDB, 1); r.onupgradeneeded = () => r.result.createObjectStore(STORE); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }
+    catch (e) { rej(e); }
+  });
+}
+export async function idbSet(key, val) { try { const db = await idb(); await new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(val, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch {} }
+export async function idbGet(key) { try { const db = await idb(); return await new Promise((res) => { const r = db.transaction(STORE).objectStore(STORE).get(key); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); }); } catch { return null; } }
+
+export function storageWorks() {
+  try { localStorage.setItem(KEY + ':probe', '1'); localStorage.removeItem(KEY + ':probe'); return true; } catch { return false; }
+}
+export async function backupCredentials() {
+  const s = load();
+  if (s.athleteId && s.apiKey) await idbSet('cred', { athleteId: s.athleteId, apiKey: s.apiKey, anthropicKey: s.anthropicKey || '' });
+  try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch {}
+}
+export async function restoreCredentials() {
+  const s = load();
+  if (s.athleteId && s.apiKey) return false;
+  const c = await idbGet('cred');
+  if (c?.athleteId && c?.apiKey) { save({ athleteId: c.athleteId, apiKey: c.apiKey, anthropicKey: s.anthropicKey || c.anthropicKey || '' }); return true; }
+  // Chrome / Android password manager (Credential Management API)
+  try {
+    if (window.PasswordCredential && navigator.credentials) {
+      const cred = await navigator.credentials.get({ password: true, mediation: 'optional' });
+      if (cred && cred.id && cred.password) { save({ athleteId: cred.id, apiKey: cred.password }); return true; }
+    }
+  } catch {}
+  return false;
+}
+export async function rememberInPasswordManager() {
+  const s = load();
+  try {
+    if (window.PasswordCredential && navigator.credentials && s.athleteId && s.apiKey) {
+      await navigator.credentials.store(new PasswordCredential({ id: s.athleteId, password: s.apiKey, name: 'intervals.icu (Ironman Coach)' }));
+    }
+  } catch {}
 }

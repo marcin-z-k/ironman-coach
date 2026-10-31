@@ -6,31 +6,24 @@ Adaptive sub-12 Ironman training app that runs entirely in your browser and read
 
 ## What it does
 
-- **Today** — the session(s) you should do today with steps, targets in watts / pace, and a week strip. Readiness (fitness, fatigue, form, HRV, resting HR, sleep) from intervals.icu wellness.
-- **Plan** — built from your last 8 weeks in intervals.icu: the same days and sports you already train, durations grown from your own, long ride progressing toward 5 h and long run toward 2 h 20. Periodised Base → Build → Peak → Taper → Race week, every 4th week a recovery week. Each session shows the past activity it is based on and what changes this time. Sessions the Ironman build needs but you don't do yet (e.g. a 3rd run, brick runs) are added and marked. Falls back to a standard template if there are fewer than ~3 weeks of data.
-- **Adaptation** — on every sync the plan is re-shaped from your data:
-  - deep fatigue (form < −30 or several warning signs) → week −20%, intensity removed
-  - carrying fatigue / ramp rate > 7 → −10%
-  - low compliance (< 70% of planned load over 14 days) → −10% so the plan stays realistic
-  - two solid weeks, fresh → +5%
-  - low HRV / high resting HR / short sleep → advice to swap today's key session
-  - new FTP / threshold pace / CSS in your intervals.icu sport settings → zones and targets update automatically
-- **Activities** — every activity matched to its planned session, with a coach summary: verdict (on target / too hard / under-delivered), what happened and what to change. Uses Claude (Anthropic API key, optional) or built-in rules.
-- **Progress** — projected race time from current thresholds, progress toward sub-12 targets (CSS 1:48, run threshold 5:13/km, FTP ≈230 W), fitness/fatigue chart, planned vs done hours.
-
-- **Your zones** — HR, power and pace zones, LTHR and max HR come from your intervals.icu sport settings. Workout steps show watts/pace *and* your HR range; activity analysis compares time in your zones (power for bike, GAP pace for run, HR as the physiological check) with the zones the planned steps prescribe.
-- **Threshold estimation** — FTP from intervals.icu eFTP, per-ride power-model FTP and power at your LTHR (HR regression); run threshold from pace at LTHR, hard sustained runs and races; swim CSS from a "CSS test" activity (session averages are shown but never auto-applied). Modes: automatic (max ±5% per update), suggest & confirm, follow intervals.icu, manual. Every change is logged.
-- **Health widgets** on the home screen: readiness (device value or calculated from HRV, resting HR, sleep, form), sleep, fitness, fatigue, form, VO2max (device or estimated from eFTP), HRV, resting HR. Tap any widget for a 7/30/90/180-day trend.
+- **Fixed week, adaptive content.** Your days are fixed (default: Mon rest · Tue swim · Wed interval run · Thu swim · Fri indoor bike + brick run · Sat long run · Sun long outdoor ride — editable in Settings). Durations, intensity and focus change with the phase (base → build → peak → taper → race week) and your data.
+- **Goal-focused sessions.** Swim: technique + a continuous swim that grows from 600 m to 3.8 km (shoulder-friendly). Run: easy pace at Z2 HR (priority), intervals, long run to 3 h with 9:1 run/walk. Bike: sweet-spot / threshold / over-unders indoors (indoor FTP) and strong-steady blocks inside the long outdoor ride (by HR when there is no power meter).
+- **Day swaps.** An activity on another day completes the planned session of that sport in the same week. Done early → the two days swap; done late → just moves. Manual "Swap day" on any session.
+- **Catch-up & focus.** 50% of missed time is spread over the remaining sessions of that sport (max +20% each, rest next week). A discipline whose sessions keep under-delivering gets up to +12% time.
+- **Indoor vs outdoor bike.** Indoor FTP drives trainer workouts and is estimated from indoor rides with real power only; estimated (Strava) outdoor watts are ignored. Values you type in Settings are kept for 4 weeks.
+- **Home:** Stamina-style rings (hours done / planned per discipline this week), health widgets (readiness, sleep, fitness, fatigue, form, VO2max, HRV, resting HR) with trend pages.
+- **Progress:** interactive race simulator (FTP, CSS, run threshold, continuous swim/run distance, wetsuit) using a model with fade — swim stops beyond your continuous distance, run/walk beyond your continuous run, bike from your real long-ride speed; PMC chart projected to race day; threshold estimates; easy pace at Z2 HR; weekly hours. Every chart shows exact values on hover/tap.
+- **Workout export:** .FIT (Garmin/Wahoo), .ZWO (Zwift) and "Send to device" (writes the workout to your intervals.icu calendar, which forwards it to connected devices).
+- **Login:** works with your browser's password manager, backed up in IndexedDB, auto sign-in where supported.
 
 ## Setup
 
-1. Open the app → **Settings**.
-2. Enter your intervals.icu **Athlete ID** (starts with `i`) and **API key** (intervals.icu → Settings → Developer Settings).
-3. Optional: an Anthropic API key for AI summaries.
-4. Save & sync. On iPhone: Share → *Add to Home Screen* for an app-like experience.
+1. Open the app and sign in with your intervals.icu athlete ID (starts with `i`) and API key (intervals.icu → Settings → Developer Settings).
+2. Check Settings: indoor FTP, power meter outdoors yes/no, longest continuous swim/run, weekly schedule.
+3. On iPhone: Share → *Add to Home Screen*.
 
-Keys are stored only in your browser's localStorage and sent only to intervals.icu / Anthropic. Nothing is stored on a server.
+Keys stay on your device and are only sent to intervals.icu (and Anthropic if you add an AI key). The Garmin FIT SDK is loaded from a CDN at runtime (its license doesn't allow bundling it here).
 
 ## Development
 
-Plain ES modules, no build step. `python3 -m http.server` in this folder and open http://localhost:8000. Settings → Advanced → Demo mode for synthetic data.
+Plain ES modules, no build step: `python3 -m http.server` and open http://localhost:8000. Settings → Advanced → Demo mode for synthetic data.

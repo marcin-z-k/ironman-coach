@@ -93,8 +93,9 @@ export function collapse(secs) {
   return { easy: easy / tot, mod: mod / tot, hard: hard / tot, total: tot, secs };
 }
 // Same for a planned session's steps (zone 1..5 per step, rests are easy)
+function flat(steps) { const o = []; for (const st of steps || []) { if (st.repeat) for (let i = 0; i < st.repeat; i++) o.push(...flat(st.steps)); else o.push(st); } return o; }
 export function plannedDist(steps) {
   const arr = [0, 0, 0, 0, 0];
-  for (const s of steps || []) { arr[Math.min(5, s.zone) - 1] += s.min; if (s.rest) arr[0] += s.rest; }
+  for (const s of flat(steps)) { const w = s.min != null ? s.min : (s.dist || 0) / 50; arr[Math.min(5, s.zone || 2) - 1] += w; if (s.rest) arr[0] += s.rest; }
   return collapse(arr.map(m => m * 60));
 }

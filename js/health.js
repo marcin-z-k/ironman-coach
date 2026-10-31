@@ -99,7 +99,7 @@ function spark(pts, color, w = 120, hgt = 32) {
   if (p.length < 2) return '';
   const vs = p.map(x => x.v); const mn = Math.min(...vs), mx = Math.max(...vs), r = mx - mn || 1;
   const d = p.map((x, i) => `${i ? 'L' : 'M'}${(i / (p.length - 1) * w).toFixed(1)},${(hgt - 3 - (x.v - mn) / r * (hgt - 6)).toFixed(1)}`).join(' ');
-  return `<svg viewBox="0 0 ${w} ${hgt}" class="spark" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<svg viewBox="0 0 ${w} ${hgt}" class="spark" preserveAspectRatio="none"><path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
 function fmtVal(key, v, unit) {
@@ -220,12 +220,12 @@ function trendChart(pts, M, ser, range, key) {
   // rolling 7-day average for noisy daily metrics
   if (['readiness', 'sleep', 'hrv', 'rhr', 'sleepHours'].includes(key) && pts.length > 7) {
     const ra = pts.map((p, i) => ({ date: p.date, v: mean(pts.slice(Math.max(0, i - 6), i + 1).map(x => x.v)) }));
-    svg += `<path d="${ra.map((p, i) => `${i ? 'L' : 'M'}${X(p.date).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ')}" fill="none" stroke="${M.color}" stroke-width="3" opacity=".9"/>`;
+    svg += `<path class="draw" pathLength="1" d="${ra.map((p, i) => `${i ? 'L' : 'M'}${X(p.date).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ')}" fill="none" stroke="${M.color}" stroke-width="3" opacity=".9"/>`;
     svg += pts.map(p => `<circle cx="${X(p.date).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${range > 90 ? 1.6 : 2.6}" fill="${M.color}" opacity=".45"/>`).join('');
   } else {
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.date).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ');
     svg += `<path d="${line} L${X(pts[pts.length - 1].date).toFixed(1)},${H - pad.b} L${X(pts[0].date).toFixed(1)},${H - pad.b} Z" fill="${M.color}" opacity=".08"/>`;
-    svg += `<path d="${line}" fill="none" stroke="${M.color}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    svg += `<path class="draw" pathLength="1" d="${line}" fill="none" stroke="${M.color}" stroke-width="2.5" stroke-linejoin="round"/>`;
     if (pts.length <= 40) svg += pts.map(p => `<circle cx="${X(p.date).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="2.5" fill="${M.color}"/>`).join('');
   }
   const lbl = [0, 0.5, 1].map(f => { const d = isoDate(new Date(t0 + (t1 - t0) * f)); return `<text x="${X(d)}" y="${H - 7}" fill="#5d6678" font-size="11" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${fmtDate(d, { day: 'numeric', month: 'short' })}</text>`; }).join('');

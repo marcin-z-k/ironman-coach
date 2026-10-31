@@ -96,6 +96,8 @@ export function normalizeActivity(a) {
     pmFtp: a.icu_pm_ftp_watts ?? a.icu_pm_ftp ?? null,           // FTP from this activity's power model
     race: !!a.race,
     trainer: !!a.trainer,
+    indoor: !!a.trainer || /virtual/i.test(a.type || ''),
+    deviceWatts: a.device_watts ?? null,               // false = estimated (e.g. Strava) power
     vi: a.icu_variability_index ?? null,
     gapSecKm: a.gap ? a.gap * 1000 : null,                        // gap is sec/m
     hrZoneSecs: Array.isArray(a.icu_hr_zone_times) ? a.icu_hr_zone_times : null,
@@ -134,13 +136,28 @@ export function normalizeWellness(w) {
 
 // Pull thresholds from athlete profile sport settings when available.
 export function thresholdsFromAthlete(athlete) {
+  // Ride: indoor_ftp → indoor FTP; ftp → outdoor FTP (indoor FTP is never seeded from the outdoor value)
   const out = {};
   const list = athlete?.sportSettings || [];
   for (const ss of list) {
     const types = (ss.types || []).map(t => t.toLowerCase());
-    if (types.some(t => t.includes('ride')) && ss.ftp) out.ftp = Math.round(ss.ftp);
+    if (types.some(t => t.includes('ride'))) {
+      if (ss.indoor_ftp) out.ftp = Math.round(ss.indoor_ftp);
+      if (ss.ftp) out.ftpOutdoor = Math.round(ss.ftp);
+    }
     if (types.some(t => t === 'run') && ss.threshold_pace) out.runThreshold = Math.round(1000 / ss.threshold_pace);
     if (types.some(t => t.includes('swim')) && ss.threshold_pace) out.css = Math.round(100 / ss.threshold_pace);
   }
   return out;
+}
+
+// Upsert planned workouts into the intervals.icu calendar (matched by external_id).
+export async function pushEvents(events) {
+  const s = load();
+  if (s.demo) { await new Promise(r => setTimeout(r, 400)); return events.map((e, i) => ({ id: i, ...e })); }
+  let url = `${BASE}/athlete/${encodeURIComponent(s.athleteId)}/events/bulk?upsert=true`;
+  if (s.corsProxy) url = s.corsProxy + encodeURIComponent(url);
+  const res = await fetch(url, { method: 'POST', headers: { Authorization: authHeader(s.apiKey), 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(events) });
+  if (!res.ok) { let m = `intervals.icu ${res.status}`; try { const j = await res.json(); m += ' ' + (j.error || j.message || ''); } catch {} const e = new Error(m.trim()); e.status = res.status; throw e; }
+  return res.json();
 }
