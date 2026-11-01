@@ -1,6 +1,6 @@
 // Training analytics: execution score, heat correction, bricks, load management, discipline split,
 // indoor/outdoor FTP coupling. Pure functions on normalised activities / wellness.
-import { load, getCache, setCache } from './store.js';
+import { load, save, getCache, setCache } from './store.js';
 import { collapse, plannedDist, getZoneModel, hrZoneOf } from './zones.js';
 import { cachedStreams, z2PaceRun, longestContinuousRun, bestWindowWith, bestWindowFrac, runMask, steadyBlocks, longestContinuousSwim } from './streams.js';
 import { isoDate, addDays, startOfWeek, parseDate, round, clamp } from './util.js';
@@ -11,7 +11,7 @@ const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) =
 
 // ---- EnviroNorm: heat correction ---------------------------------------------------
 export function getTemp(a) { const t = (getCache('temps') || {})[a.id]; return t != null ? t : null; }
-export function setTemp(a, t) { const m = getCache('temps') || {}; if (t == null || t === '') delete m[a.id]; else m[a.id] = +t; setCache('temps', m); }
+export function setTemp(a, t) { const m = getCache('temps') || {}; if (t == null || t === '') delete m[a.id]; else m[a.id] = +t; setCache('temps', m); save({ tempsAt: Date.now() }); }
 // ~1.75% per 5 °C above 22 °C
 export function heatFactor(a) { const t = getTemp(a); return t != null && t > 22 ? 1 + 0.0175 * (t - 22) / 5 : 1; }
 
@@ -193,38 +193,38 @@ export function gradedPowerSeries(st, m) {
 }
 export const flatPowerSeries = gradedPowerSeries;
 
-// Outdoor FTP (no power meter): per ride, zone-2 scaling (weight 0.65) and best-held effort scaled
-// by its HR (0.35), using power from speed + real gradient (CdA 0.35, Crr 0.005). Median over the
-// rides of the last 10 weeks, so a tailwind or a draft on one day doesn't decide it.
+// Outdoor FTP (no power meter) from your LONG outdoor rides (≥ 2.5 h, last 6 months — winter-proof).
+// Long rides are ridden at a consistent zone-2 effort, so each one gives a clean zone-2 power:
+//   1. average moving speed, adjusted for the climbing: average power =
+//        air (½·ρ·CdA·v³, the wind resistance grows with the cube of speed) + rolling (Crr·m·g·v)
+//        + climbing (m·g·elevation gain / moving time, half of it given back on the descents)
+//      → "gradient-adjusted flat speed" = the flat speed that needs that same power
+//   2. zone-2 power → FTP: divided by the %FTP that matches the ride's average HR in your HR zones
+//      (start of Z2 = 56 %, top of Z2 = 75 %, LTHR = 100 %), kept between 65 and 75 %
+//      (no usable HR → 68 %, a typical long-ride intensity)
+// Median of the up to 4 longest recent rides.
+export const LONG_RIDE_SEC = 2.5 * 3600;
+function flatSpeedFor(P, m) { let lo = 1, hi = 20; for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (physicsPower(mid, 0, m) > P) hi = mid; else lo = mid; } return lo; }
 export function outdoorFtpEstimate(acts, s) {
-  const from = isoDate(addDays(new Date(), -70));
+  const from = isoDate(addDays(new Date(), -183));
   const m = (s.weightKg || 75) + 9;
+  const long = acts.filter(a => a.sport === 'bike' && !a.indoor && a.date >= from && a.movingSec >= LONG_RIDE_SEC && a.distanceM > 40000)
+    .sort((x, y) => y.movingSec - x.movingSec || y.date.localeCompare(x.date)).slice(0, 4);
   const rides = [];
-  for (const a of acts) {
-    if (a.sport !== 'bike' || a.indoor || a.date < from || a.movingSec < 1800) continue;
-    const st = cachedStreams(a.id);
-    const gp = gradedPowerSeries(st, m);
-    if (!gp) continue;
-    const r = ftpReadings(gp.P, st.hr, st.time, gp.ok, { blockSec: 300, cvMax: 0.6, frac: 0.7 });
-    if (!r || (!r.z2 && !r.held)) continue;
-    const v = r.z2 && r.held ? 0.65 * r.z2 + 0.35 * r.held.ftp : (r.z2 || r.held.ftp);
-    const z2r = hrZone2(); const sb = z2r ? steadyBlocks(st.speed, st.hr, st.time, gp.ok, 300, 0.6).filter(([h]) => h >= z2r[0] - 2 && h <= z2r[1] + 2) : [];
-    const kmh = sb.length ? median(sb.map(([, v]) => v)) * 3.6 : null;
-    if (v > 70 && v < 400) rides.push({ ftp: v, z2: r.z2, z2w: r.z2w, kmh, held: r.held, date: a.date });
+  for (const a of long) {
+    const v = a.distanceM / a.movingSec;
+    if (!(v > 4 && v < 14)) continue;
+    const gain = a.elev ?? null;
+    const climbW = gain ? 0.5 * m * G * gain / a.movingSec / ETA : 0;
+    const P = physicsPower(v, 0, m) + climbW;
+    const pctHr = a.avgHr ? hrToFtpPct(a.avgHr) : null;
+    const pct = clamp(pctHr ?? 0.68, 0.65, 0.75);
+    rides.push({ date: a.date, name: a.name, km: Math.round(a.distanceM / 1000), kmh: round(v * 3.6, 1), gain, P, adjKmh: round(flatSpeedFor(P, m) * 3.6, 1), hr: a.avgHr ? Math.round(a.avgHr) : null, pct, ftp: P / pct });
   }
   if (!rides.length) return null;
-  rides.sort((x, y) => y.date.localeCompare(x.date));
-  const use = rides.slice(0, 6);
-  const z2s = use.filter(r => r.z2), hs = use.filter(r => r.held);
-  const best = hs.length ? hs.slice().sort((x, y) => y.held.P - x.held.P)[0].held : null;
-  return {
-    ftp: Math.round(median(use.map(r => r.ftp))), n: rides.length, used: use.length,
-    z2kmh: z2s.filter(r => r.kmh).length ? round(median(z2s.filter(r => r.kmh).map(r => r.kmh)), 1) : null,
-    z2: z2s.length ? Math.round(median(z2s.map(r => r.z2))) : null, z2w: z2s.length ? Math.round(median(z2s.map(r => r.z2w))) : null,
-    held: hs.length ? Math.round(median(hs.map(r => r.held.ftp))) : null,
-    best: best ? { P: best.P, hr: best.hr, min: best.min } : null,
-    method: 'zone-2 watts scaled by HR + best held effort, power from speed and gradient',
-  };
+  const ftp = Math.round(median(rides.map(r => r.ftp)));
+  const z2w = Math.round(median(rides.map(r => r.P)));
+  return { ftp, n: rides.length, used: rides.length, rides, z2w, z2kmh: round(median(rides.map(r => r.adjKmh)), 1), pct: round(median(rides.map(r => r.pct)), 2), method: 'long rides: gradient-adjusted average speed → zone-2 power → FTP' };
 }
 
 // Continuous swim: longest distance without a break > 2 min, best of the last `days`.
@@ -248,7 +248,7 @@ export function ftpCoupling(acts, s) {
   let c = s.ftpCoupling?.source === 'your outdoor FTP' ? s.ftpCoupling : null;
   const est = outdoorFtpEstimate(acts, s);
   if (s.outdoorPower && s.ftpOutdoor) c = { ratio: s.ftpOutdoor / s.ftp, outdoor: s.ftpOutdoor, indoor: s.ftp, source: 'power meter' };
-  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: `${est.z2kmh ?? '–'} km/h on flat roads at zone-2 HR ≈ ${est.z2w ?? '–'} W (CdA 0.35) → scaled to FTP${est.held ? `, plus your hard efforts (${est.held} W)` : ''} · ${est.used} ride${est.used > 1 ? 's' : ''}` };
+  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: `${est.n} long ride${est.n > 1 ? 's' : ''}: ${est.z2kmh} km/h gradient-adjusted ≈ ${est.z2w} W zone-2 power = ${Math.round(est.pct * 100)}% of FTP` };
   if (!c) return { target, est, ratio: null };
   const outdoorNow = Math.round(s.ftp * c.ratio);
   const indoorTarget = Math.round(target / c.ratio);

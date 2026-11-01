@@ -48,8 +48,15 @@ export function load() {
   return state;
 }
 
-export function save(patch = {}) {
+// Settings that are the same on every device of an account (synced via intervals.icu).
+export const LOCAL_ONLY = new Set(['athleteId', 'apiKey', 'anthropicKey', 'anthropicModel', 'corsProxy', 'demo', 'mig2', 'restHr', 'updatedAt', 'syncedAt']);
+let onChange = null;
+export function setOnChange(fn) { onChange = fn; }
+export function save(patch = {}, { silent = false } = {}) {
+  const shared = Object.keys(patch).some(k => !LOCAL_ONLY.has(k));
+  if (shared && !silent) patch = { ...patch, updatedAt: Date.now() };
   state = { ...load(), ...patch };
+  if (shared && !silent) try { onChange?.(); } catch {}
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
   if ('athleteId' in patch || 'apiKey' in patch) backupCredentials();
   return state;

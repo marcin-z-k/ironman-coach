@@ -10,7 +10,8 @@ import { exportFit, exportZwo, icuEvent } from './export.js';
 import { isoDate, addDays } from './util.js';
 import { prefetch } from './streams.js';
 import { aiCoachPrompt, importPlan, exportPlan, goalFromMeta } from './customplan.js';
-import { setCache, getCache } from './store.js';
+import { setCache, getCache, setOnChange } from './store.js';
+import { syncSettings, schedulePush } from './sync.js';
 import { el, esc } from './util.js';
 import { download } from './export.js';
 import { renderFuelSheet } from './ui.js';
@@ -95,7 +96,9 @@ function planAction(kind) {
   }
 }
 
+setOnChange(schedulePush);
 const ui = {
+  syncAction: async (dir) => { try { const r = await syncSettings({ force: dir }); A = null; toast(r === 'pushed' ? 'This device\'s values are now used on all devices' : 'Loaded the values from your account'); ui.invalidate?.(); render(); } catch (e) { toast('Sync failed: ' + e.message, true); } },
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
   trendRange: 30, selectedDate: null,
   openWeeks: new Set(), openWeeksTouched: false, openSess: new Set(), openActs: new Set(),
@@ -240,6 +243,7 @@ async function sync(fromLogin = false) {
   if (!isConfigured() || syncing) { render(); return; }
   syncing = true; btnRefresh.classList.add('spin'); updateStatus();
   try {
+    try { const r = await syncSettings(); if (r === 'pulled') A = null; ui.syncState = r; } catch (e) { console.warn('settings sync', e); ui.syncState = 'error'; }
     data = await fetchAll({ days: 150 });
     setZoneModel(buildZoneModel(data.athlete));
     const rhr = (data.wellness || []).map(w => w.restingHR).filter(Boolean).slice(-14);
@@ -265,7 +269,11 @@ btnRefresh.onclick = () => sync();
 document.getElementById('btnSettings').onclick = () => setTab('settings');
 document.getElementById('btnFuel').onclick = () => openSheet(renderFuelSheet(ui));
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t.startsWith('trend-')) { keepScrollY = null; render(); window.scrollTo({ top: 0 }); return; } if (TABS.includes(t)) { if (t !== ui.tab) setTab(t); else render(); } });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && data?.fetchedAt && Date.now() - data.fetchedAt > 30 * 60000) sync(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (data?.fetchedAt && Date.now() - data.fetchedAt > 30 * 60000) { sync(); return; }
+  if (isConfigured()) syncSettings().then(r => { if (r === 'pulled') { A = null; render(); } }).catch(() => {});
+});
 
 // Update check: version.json is fetched uncached; if a newer build is live, offer a reload.
 async function checkUpdate() {
@@ -287,5 +295,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) chec
   if (location.hash.startsWith('#trend-')) render(); else setTab(ui.tab);
   const restored = await restoreCredentials();
   if (restored) { toast('Signed in'); render(); }
-  if (isConfigured()) { backupCredentials(); if (!data || restored || Date.now() - (data.fetchedAt || 0) > 10 * 60000) sync(); else loadRunStreams(); }
+  if (isConfigured()) { backupCredentials(); if (!data || restored || Date.now() - (data.fetchedAt || 0) > 10 * 60000) sync(); else { loadRunStreams(); syncSettings().then(r => { if (r === 'pulled') { A = null; render(); } }).catch(e => console.warn(e)); } }
 })();

@@ -501,7 +501,11 @@ function thresholdCard(data, ui) {
   const lbl = { ftp: ['Indoor FTP', 'bike', '#ffb020'], runThreshold: ['Run threshold', 'run', '#58e39a'], css: ['Swim CSS', 'swim', '#4cc3ff'] };
   const fmt = (k, v) => v == null ? '–' : k === 'ftp' ? `${Math.round(v)} W` : `${paceToStr(v)}${k === 'css' ? '/100m' : '/km'}`;
   const conf = { high: 'good', medium: '', low: 'warn', none: '' };
-  const card = h(`<div class="card"><div class="card-title">Thresholds · estimated from your activities</div></div>`);
+  // goal bands: indoor FTP needed for the outdoor race target; run threshold that goes with the
+  // easy-pace goal (5:30–6:00/km); CSS that allows a ~1:15–1:20 Ironman swim
+  const cp = ftpCoupling(acts, s), pz = getZoneModel().run.pace, zf = ((pz?.[0] || 77.5) + (pz?.[1] || 87.7)) / 200;
+  const goals = { ftp: cp.indoorTarget ? [cp.indoorTarget, Math.round(cp.indoorTarget * 1.04)] : null, runThreshold: [Math.round(330 * zf), Math.round(360 * zf)], css: [112, 120] };
+  const card = h(`<div class="card"><div class="card-title">Thresholds · estimated from your activities</div><div class="small muted" style="margin:-4px 0 8px">Green band = goal: indoor FTP for ${cp.target} W outdoors${cp.indoorTarget ? ` (${cp.indoorTarget} W)` : ''} · run threshold matching an easy pace of 5:30–6:00/km (${paceToStr(goals.runThreshold[0])}–${paceToStr(goals.runThreshold[1])}) · CSS 1:52–2:00 for a 1:15–1:20 swim.</div></div>`);
   for (const k of Object.keys(lbl)) {
     const e = est[k];
     const held = s.holds?.[k] && s.holds[k] >= todayIso;
@@ -510,7 +514,8 @@ function thresholdCard(data, ui) {
       ${e.hint ? `<div class="small" style="color:var(--warn)">${esc(e.hint)}</div>` : ''}
       ${e.methods.length ? `<div class="small faint">${e.methods.map(m => `${esc(m.label)}: ${fmt(k, m.value)} <span class="faint">(${esc(m.detail)})</span>`).join(' · ')}</div>` : '<div class="small faint">Not enough suitable activities in the last 6 weeks.</div>'}</div>`);
     const pts = trend[k].filter(p => p.value != null).map(p => ({ x: p.date, y: p.value }));
-    if (pts.length >= 2) row.querySelector('.th-chart').append(lineChart({ height: 120, invert: k !== 'ftp', yFmt: v => fmt(k, v).replace('/100m', '').replace('/km', ''), series: [{ name: 'Estimate', color: lbl[k][2], pts, dots: true, fmt: v => fmt(k, v) }, { name: 'In use', color: '#9aa3b2', pts: pts.map(p => ({ x: p.x, y: s[k] })), dash: true, width: 1.2, fmt: v => fmt(k, v) }] }));
+    const gb = goals[k];
+    if (pts.length >= 2) row.querySelector('.th-chart').append(lineChart({ height: 120, invert: k !== 'ftp', bands: gb ? [{ y0: gb[0], y1: gb[1], color: 'rgba(88,227,154,.09)', label: 'goal' }] : [], yFmt: v => fmt(k, v).replace('/100m', '').replace('/km', ''), series: [{ name: 'Estimate', color: lbl[k][2], pts, dots: true, fmt: v => fmt(k, v) }, { name: 'In use', color: '#9aa3b2', pts: pts.map(p => ({ x: p.x, y: s[k] })), dash: true, width: 1.2, fmt: v => fmt(k, v) }] }));
     card.append(row);
   }
   const log = (s.thresholdLog || []).slice(0, 8);
@@ -546,7 +551,7 @@ function loadCard(acts, wellness) {
   if (gz?.high) extra.append(h(`<div class="adjust-banner"><span>!</span><div><strong>High Zone-3 share (${Math.round(gz.share * 100)}% this week).</strong> Avoid the grey zone — keep base training strictly in Z1/Z2.</div></div>`));
   if (mono.high) extra.append(h(`<div class="adjust-banner bad"><span>!</span><div><strong>Training monotony ${mono.monotony} (&gt; 2.0).</strong> Every day looks the same — make easy days easier and hard days harder, or add a real rest day.</div></div>`));
   if (rr && rr.value > 8) extra.append(h(`<div class="adjust-banner bad"><span>!</span><div><strong>Fitness rising ${rr.value} CTL/week.</strong> High risk of injury or overtraining — the plan will trim volume next week.</div></div>`));
-  if (rr?.series?.length > 2) { const c = lineChart({ height: 120, zero: true, bands: [{ y0: 5, y1: 8, color: 'rgba(255,176,32,.08)' }, { y0: 8, y1: 30, color: 'rgba(255,92,108,.08)' }], series: [{ name: 'Ramp (CTL/wk)', color: '#38c6ff', pts: rr.series, dots: true, fmt: v => (v > 0 ? '+' : '') + v }] }); extra.append(c); }
+  if (rr?.series?.length > 2) { const c = lineChart({ height: 120, zero: true, bands: [{ y0: 2, y1: 5, color: 'rgba(88,227,154,.09)', label: 'goal' }, { y0: 5, y1: 8, color: 'rgba(255,176,32,.08)' }, { y0: 8, y1: 30, color: 'rgba(255,92,108,.08)' }], series: [{ name: 'Ramp (CTL/wk)', color: '#38c6ff', pts: rr.series, dots: true, fmt: v => (v > 0 ? '+' : '') + v }] }); extra.append(c); }
   const days = mono.days;
   extra.append(barChart({ height: 110, cats: days.map(d => ({ label: fmtDate(d.d, { weekday: 'short' }).slice(0, 2), title: fmtDate(d.d) })), yFmt: v => String(Math.round(v)), series: [{ name: 'Load', color: '#ff6a3d', values: days.map(d => d.load) }] }));
   return card;
@@ -585,7 +590,7 @@ function couplingCard(acts, ui) {
   const c = ftpCoupling(acts, s);
   const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Bike FTP · indoor ↔ outdoor</div><button class="btn ghost small" data-recal>Recalibrate</button></div></div>`);
   card.querySelector('[data-recal]').onclick = () => { save({ ftpCoupling: null }); ui.toast('Recalibrating outdoor/indoor ratio'); ui.invalidate(); };
-  if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs an outdoor ride ≥ 30 min with speed and elevation data in the last 10 weeks (or an outdoor FTP in Settings). Outdoor FTP = best power held for 20–60 min on flat stretches (≤1.5 % grade), computed from speed (CdA 0.35).</div>`)); return card; }
+  if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs an outdoor ride of 2.5 h or longer in the last 6 months (or an outdoor FTP in Settings). Outdoor FTP comes from your long rides: average speed adjusted for the climbing → zone-2 power → scaled up to FTP by your heart rate.</div>`)); return card; }
   const pct = Math.round((c.ratio - 1) * 100);
   card.append(h(`<div><div class="dmetrics" style="margin-top:10px">
       <div class="metric"><div class="v" style="color:var(--bike)">${s.ftp} W</div><div class="k">Indoor FTP</div></div>
@@ -596,6 +601,7 @@ function couplingCard(acts, ui) {
       <div class="progress glow"><span style="width:${Math.min(100, c.progress * 100)}%"></span></div>
       <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Ratio calibrated ${c.calib.date ? fmtDate(c.calib.date, { day: 'numeric', month: 'short' }) + ' ' : ''}from ${esc(c.calib.source)}${c.est && c.calib.source === 'your outdoor FTP' ? ` · automatic outdoor estimate: ${c.est.ftp} W` : ''}. As indoor FTP rises, the outdoor value scales with the same ratio.</div></div>
     ${c.ratio > 1.4 && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting). If it looks wrong, enter your outdoor FTP baseline in Settings.</div></div>` : ''}</div>`));
+  if (c.est?.rides?.length) card.append(h(`<details class="more" style="margin-top:10px"><summary>Long rides used (${c.est.rides.length})</summary><div class="small muted" style="line-height:1.6">${c.est.rides.map(r => `${fmtDate(r.date, { day: 'numeric', month: 'short' })} · ${r.km} km @ ${r.kmh} km/h${r.gain != null ? `, ${Math.round(r.gain)} hm` : ''} → ${r.adjKmh} km/h flat-equivalent ≈ <b style="color:var(--text)">${Math.round(r.P)} W</b>${r.hr ? ` at ${r.hr} bpm` : ''} = ${Math.round(r.pct * 100)}% → <b style="color:var(--text)">${Math.round(r.ftp)} W</b>`).join('<br>')}<br><span class="faint">Power from speed: air resistance ½·ρ·CdA·v³ (CdA 0.35, grows with the cube of speed) + rolling resistance + climbing (half recovered on descents). Median of the rides = ${c.est.ftp} W.</span></div></details>`));
   return card;
 }
 
@@ -704,6 +710,13 @@ export function renderSettings(ui, onSave) {
       <button class="btn secondary" type="button" data-pa="export">⤓ Export current plan (JSON)</button>
       <button class="btn ghost" type="button" data-pa="reset">↺ Reset to default plan</button>
     </div><div class="small faint" style="margin-top:12px">App version ${esc(window.APP_VERSION || 'dev')}</div></div>`));
+  if (!s.demo) root.querySelector('form').after(h(`<div class="card"><div class="card-title">Devices</div>
+    <div class="small muted" style="margin-bottom:10px">Settings, thresholds, simulator values, day moves and your custom plan are stored in your intervals.icu account (a hidden note on 1 Jan 2000), so every device signed in with this athlete shows the same values. Your API key never leaves this device.${s.syncedAt ? ` Last synced ${new Date(s.syncedAt).toLocaleString()}.` : ''}</div>
+    <div class="stack" style="gap:8px">
+      <button class="btn secondary" type="button" data-sync="push">⇧ Use this device's values on all devices</button>
+      <button class="btn ghost" type="button" data-sync="pull">⇩ Load the values from my account</button>
+    </div></div>`));
+  root.querySelectorAll('[data-sync]').forEach(b => b.onclick = () => ui.syncAction(b.dataset.sync));
   root.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => ui.planAction(b.dataset.pa));
   const form = root.querySelector('form');
   const syncGoal = () => {
