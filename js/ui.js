@@ -512,6 +512,7 @@ function thresholdCard(data, ui) {
     const row = h(`<div class="th-row"><div class="row between"><div><div class="sport-${lbl[k][1]}" style="font-weight:700">${lbl[k][0]}</div><div class="small muted">in use <b style="color:var(--text)">${fmt(k, s[k])}</b> · estimate <b style="color:var(--text)">${fmt(k, e.value)}</b>${held ? ` · <span class="sport-bike">your value kept until ${fmtDate(s.holds[k], { day: 'numeric', month: 'short' })}</span>` : ''}</div></div><span class="pill ${conf[e.confidence]}">${e.confidence === 'none' ? 'no data' : e.confidence}</span></div>
       <div class="th-chart"></div>
       ${e.hint ? `<div class="small" style="color:var(--warn)">${esc(e.hint)}</div>` : ''}
+      ${e.info ? `<div class="small faint">${esc(e.info)}</div>` : ''}
       ${e.methods.length ? `<div class="small faint">${e.methods.map(m => `${esc(m.label)}: ${fmt(k, m.value)} <span class="faint">(${esc(m.detail)})</span>`).join(' · ')}</div>` : '<div class="small faint">Not enough suitable activities in the last 6 weeks.</div>'}</div>`);
     const pts = trend[k].filter(p => p.value != null).map(p => ({ x: p.date, y: p.value }));
     const gb = goals[k];

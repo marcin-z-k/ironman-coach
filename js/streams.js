@@ -265,3 +265,31 @@ export function longestContinuousSwim(st) {
   }
   return best > 0 ? Math.round(best) : null;
 }
+
+// Steady efforts ≥ minSec: stretches where the 30-s power stays within ±tol of the effort's mean
+// (an interval, a block of a structured workout, a steady ride section). HR = mean of the 2nd half
+// (HR needs 1–2 min to catch up with a new power). Returns [{ P, hr, sec, start }].
+export function steadyEfforts(watts, hr, minSec = 300, tol = 0.1) {
+  if (!watts || !hr) return [];
+  const n = watts.length, p30 = new Array(n).fill(null);
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < n; i++) {
+    const w = watts[i]; if (w != null) { sum += w; cnt++; }
+    if (i >= 30 && watts[i - 30] != null) { sum -= watts[i - 30]; cnt--; }
+    p30[i] = cnt >= 20 ? sum / cnt : null;
+  }
+  const out = [];
+  let i = 0;
+  while (i < n) {
+    if (p30[i] == null || p30[i] < 50) { i++; continue; }
+    let j = i, ws = 0, wc = 0;
+    while (j < n && p30[j] != null && (wc === 0 || Math.abs(p30[j] - ws / wc) <= tol * ws / wc)) { ws += p30[j]; wc++; j++; }
+    if (j - i >= minSec) {
+      let ps = 0, pc = 0, hs = 0, hc = 0;
+      for (let k = i; k < j; k++) { if (watts[k] != null) { ps += watts[k]; pc++; } if (k >= i + (j - i) / 2 && hr[k]) { hs += hr[k]; hc++; } }
+      if (pc && hc) out.push({ P: ps / pc, hr: hs / hc, sec: j - i, start: i });
+      i = j;
+    } else i++;
+  }
+  return out;
+}

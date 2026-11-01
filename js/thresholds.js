@@ -6,8 +6,8 @@
 import { isoDate, addDays, parseDate, round, clamp } from './util.js';
 import { getZoneModel } from './zones.js';
 import { isHard } from './history.js';
-import { hrProportional, easyPaceNow, ftpReadings, hrZone2 } from './analytics.js';
-import { cachedStreams, steadyBlocks, bestWindowWith } from './streams.js';
+import { hrProportional, easyPaceNow, hrZone2, hrToFtpPct } from './analytics.js';
+import { cachedStreams, steadyBlocks, bestWindowWith, steadyEfforts } from './streams.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -32,47 +32,52 @@ export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
   const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200 && a.indoor && a.deviceWatts !== false);
   const methods = [];
   const L = getZoneModel().bike.lthr, R = s.restHr || 55;
-  // 1) zone-2 scaling: your watts in steady blocks with HR in zone 2, each scaled up by its %FTP
-  //    (start of HR Z2 ↔ 56 %, top of Z2 ↔ 75 %, LTHR ↔ 100 %), median over all recent indoor rides
-  // 2) held: the most watts you held for 20/40/60 min, scaled by the HR you held them at
-  const z2v = [], z2w = [], held = [];
-  const recent = rides.slice().sort((x, y) => y.date.localeCompare(x.date));
-  for (const a of recent) {
+  // HR → %FTP from your HR zones: start of Z2 = 56 %, top of Z2 = 75 %, LTHR = 100 %.
+  // Heat, HR drift and fatigue only ever make the watts at a given HR LOWER, so the best recent
+  // readings are the truest — we use the upper end, not the median.
+  // A) steady efforts ≥ 5 min (intervals like 3×6 min, steady blocks): FTP = P ÷ %FTP(HR of the 2nd half)
+  //    → median of the 3 highest of the last 6 weeks                                          weight 0.6
+  // B) zone-2 envelope: 3-min blocks with HR in Z2, P ÷ %FTP(HR) → 80th percentile             weight 0.25
+  // C) watts↔HR line read off at LTHR (only if the line is tight, r > 0.7)                      weight 0.15
+  const effs = [], z2v = [], blocks = [];
+  const z2 = hrZone2();
+  for (const a of rides) {
     const st = cachedStreams(a.id); if (!st?.watts || !st.hr) continue;
+    for (const e of steadyEfforts(st.watts, st.hr, 300, 0.1)) {
+      if ((st.time?.[e.start] ?? e.start) < 300) continue;            // skip the first 5 min (warm-up, HR not settled)
+      const pct = hrToFtpPct(e.hr); if (!pct) continue;
+      effs.push({ ftp: e.P / pct, P: e.P, hr: Math.round(e.hr), min: Math.round(e.sec / 60), date: a.date, pct });
+    }
     const ok = st.watts.map(w => w != null && w > 30);
-    const r = ftpReadings(st.watts, st.hr, st.time, ok);
-    if (!r) continue;
-    if (r.z2) { z2v.push(r.z2); z2w.push(r.z2w); }
-    if (r.held) held.push(r.held);
+    const bl = steadyBlocks(st.watts, st.hr, st.time, ok);
+    blocks.push(...bl);
+    if (z2) for (const [h, w] of bl) if (h >= z2[0] - 2 && h <= z2[1] + 2) { const pct = hrToFtpPct(h); if (pct) z2v.push(w / pct); }
   }
-  const zr = hrZone2();
-  if (z2v.length) methods.push({ key: 'z2', label: 'Zone-2 watts scaled up', value: Math.round(median(z2v.slice(0, 6))), weight: 0.45, detail: `${Math.round(median(z2w.slice(0, 6)))} W at Z2 HR ${zr ? zr.join('–') : ''} bpm · ${Math.min(6, z2v.length)} ride${z2v.length > 1 ? 's' : ''}` });
-  if (held.length) {
-    const top = held.slice(0, 6).sort((x, y) => y.ftp - x.ftp).slice(0, 3);
+  if (effs.length) {
+    const top = effs.slice().sort((x, y) => y.ftp - x.ftp).slice(0, 3);
     const b0 = top[0];
-    methods.push({ key: 'time', label: 'Most watts held, scaled by HR', value: Math.round(median(top.map(h => h.ftp))), weight: 0.35, detail: `best: ${Math.round(b0.P)} W for ${b0.min} min at ${b0.hr} bpm` });
+    methods.push({ key: 'efforts', label: 'Steady efforts ≥ 5 min', value: Math.round(median(top.map(e => e.ftp))), weight: 0.6, detail: `best: ${Math.round(b0.P)} W for ${b0.min} min at ${b0.hr} bpm (= ${Math.round(b0.pct * 100)} % FTP) on ${b0.date} · ${effs.length} efforts` });
   }
-  // 3) watts ↔ HR line read off at LTHR (supporting)
-  const blocks = [];
-  for (const a of rides) { const st = cachedStreams(a.id); if (st?.watts && st.hr) blocks.push(...steadyBlocks(st.watts, st.hr, st.time, st.watts.map(w => w != null && w > 30))); }
+  if (z2v.length >= 3) { z2v.sort((x, y) => x - y); methods.push({ key: 'z2', label: 'Zone-2 watts (upper end)', value: Math.round(z2v[Math.floor(z2v.length * 0.8)]), weight: 0.25, detail: `80th percentile of ${z2v.length} zone-2 blocks, HR ${z2 ? z2.join('–') : ''} bpm` }); }
   if (L && blocks.length >= 8) {
     const r = linreg(blocks);
-    if (r && r.b > 0 && r.spread >= 8 && r.r > 0.4) {
+    if (r && r.b > 0 && r.spread >= 8 && r.r > 0.7) {
       const v = r.a + r.b * L;
-      if (v > cur * 0.6 && v < cur * 1.6) methods.push({ key: 'blocks', label: `Watts at LTHR ${L} bpm`, value: Math.round(v), weight: r.r > 0.7 ? 0.2 : 0.1, detail: `${blocks.length} steady 3-min blocks, r=${round(r.r, 2)}` });
+      if (v > cur * 0.6 && v < cur * 1.6) methods.push({ key: 'blocks', label: `Watts at LTHR ${L} bpm`, value: Math.round(v), weight: 0.15, detail: `${blocks.length} steady 3-min blocks, r=${round(r.r, 2)}` });
     }
   }
-  // 3) intervals.icu eFTP (latest indoor ride)
+  const held = [];
+  for (const a of rides) { const st = cachedStreams(a.id); if (!st?.watts) continue; const w = bestWindowWith(st.watts, null, st.watts.map(x => x != null), 3600); if (w) held.push(w.mean); }
   const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
-  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP', value: withE[0].eftp, weight: 0.1, detail: `latest, ${withE[0].date}` });
   // fallback without streams: whole-ride NP vs HR (proportional)
-  if (!methods.some(m => m.key === 'blocks' || m.key === 'time' || m.key === 'z2') && L) {
+  if (!methods.some(m => m.key === 'blocks' || m.key === 'efforts' || m.key === 'z2') && L) {
     const ex = rides.filter(a => (a.np || a.avgW) && a.avgHr >= 0.75 * L).sort((a, b) => b.date.localeCompare(a.date)).map(a => hrProportional(a.np || a.avgW, a.avgHr, s)).filter(Boolean).slice(0, 3);
     if (ex.length) methods.push({ key: 'hrprop', label: 'HR-proportional (whole rides)', value: Math.round(median(ex)), weight: 0.25, detail: `${ex.length} rides, no stream data` });
   }
   const res = combine(methods, cur, 'W');
+  if (withE.length) res.info = `intervals.icu eFTP ${withE[0].eftp} W (${withE[0].date}) — shown for reference, not used`;
   // never below the watts you actually held for 60 min
-  const p60 = Math.max(0, ...held.filter(h => h.min === 60).map(h => h.P));
+  const p60 = Math.max(0, ...held);
   if (res.value != null && res.value < p60) res.value = Math.round(p60);
   return res;
 }
