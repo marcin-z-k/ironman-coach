@@ -227,19 +227,29 @@ export function outdoorFtpEstimate(acts, s) {
   return { ftp, n: rides.length, used: rides.length, rides, z2w, z2kmh: round(median(rides.map(r => r.adjKmh)), 1), pct: round(median(rides.map(r => r.pct)), 2), method: 'long rides: gradient-adjusted average speed → zone-2 power → FTP' };
 }
 
-// Continuous swim: longest distance without a break > 2 min, best of the last `days`.
+export function isOpenWater(a) {
+  return /open ?water|openwater/i.test(a.type || '') || /open ?water|freiwasser|see\b|lake|meer|ocean|sea\b|river|fluss/i.test(a.name || '') || (Array.isArray(a.streamTypes) && a.streamTypes.includes('latlng'));
+}
+// Continuous swim (POOL swims only):
+//   per swim  cᵢ = longest distance without a pause > 2 min (wall stops, goggles, waiting don't count)
+//   last 6 pool swims within `days`, weight wᵢ = 0.5^(days ago / 14)  (halves every 2 weeks)
+//   estimate = Σ wᵢ·cᵢ / Σ wᵢ, rounded to 50 m
 export function continuousSwim(acts, days = 56) {
-  const from = isoDate(addDays(new Date(), -days));
-  let best = null, n = 0;
-  for (const a of acts) {
-    if (a.sport !== 'swim' || a.date < from || !(a.distanceM > 100)) continue;
-    let m = longestContinuousSwim(cachedStreams(a.id)), src = 'streams';
+  const now = new Date(), from = isoDate(addDays(now, -days));
+  const list = [];
+  const swims = acts.filter(a => a.sport === 'swim' && a.date >= from && a.distanceM > 100 && !isOpenWater(a)).sort((x, y) => y.date.localeCompare(x.date));
+  for (const a of swims) {
+    let m = longestContinuousSwim(cachedStreams(a.id)), src = 'lengths';
     if (m == null && a.elapsedSec && a.movingSec && a.elapsedSec - a.movingSec <= 120) { m = a.distanceM; src = 'no long pauses'; }
     if (m == null) continue;
-    n++;
-    if (!best || m > best.m) best = { m: Math.round(m), date: a.date, name: a.name, src };
+    const age = Math.max(0, (now - parseDate(a.date)) / 864e5);
+    list.push({ date: a.date, name: a.name, m: Math.round(m), age: Math.round(age), w: Math.pow(0.5, age / 14), src });
+    if (list.length >= 6) break;
   }
-  return best ? { ...best, swims: n } : null;
+  if (!list.length) return null;
+  const sw = list.reduce((x, r) => x + r.w, 0);
+  const est = Math.round(list.reduce((x, r) => x + r.w * r.m, 0) / sw / 50) * 50;
+  return { m: Math.max(50, est), swims: list.length, list, date: list[0].date };
 }
 
 export function ftpCoupling(acts, s) {

@@ -22,7 +22,7 @@ export function baseline(acts, s) {
   const cs = continuousSwim(acts, 56);
   out.swimContInfo = cs;
   out.swimCont = clamp(Math.round((s.swimContinuous || (cs ? cs.m : 400)) / 50) * 50, 100, 10000);
-  out.notes.swimCont = s.swimContinuous ? 'your Settings value' : cs ? `longest swim without a break > 2 min: ${cs.m} m (${cs.date}, ${cs.swims} swims checked)` : 'no swim data — 400 m assumed';
+  out.notes.swimCont = s.swimContinuous ? 'your Settings value' : cs ? `recency-weighted average of your last ${cs.swims} pool swims (longest distance without a pause > 2 min each: ${cs.list.map(r => `${r.m} m`).join(', ')}; weight halves every 2 weeks)` : 'no swim data — 400 m assumed';
   out.notes.swim = swims.length ? `median of ${swims.length} swims (8 wk)` : 'CSS + 12 s (no recent swims)';
   // bike — long outdoor rides
   const rides = since(acts, 70).filter(a => a.sport === 'bike' && !a.indoor && a.movingSec >= 2.5 * 3600 && a.distanceM > 0);

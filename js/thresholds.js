@@ -120,9 +120,8 @@ export function estimateRun(acts, cur, endIso, days = 42) {
   return combine(methods, cur, 's/km', true);
 }
 
-export function isOpenWater(a) {
-  return /open ?water|openwater/i.test(a.type || '') || /open ?water|freiwasser|see\b|lake|meer|ocean|sea\b|river|fluss/i.test(a.name || '') || (Array.isArray(a.streamTypes) && a.streamTypes.includes('latlng'));
-}
+export { isOpenWater } from './analytics.js';
+import { isOpenWater } from './analytics.js';
 export function estimateSwim(acts, cur, endIso, days = 56) {
   // POOL swims only (open water: GPS drift, sighting, breaststroke). Rolling: the 5 most recent pool swims.
   const swims = windowActs(acts, endIso, days).filter(a => a.sport === 'swim' && !isOpenWater(a) && a.pace100 && a.pace100 > 70 && a.pace100 < 240 && a.distanceM >= 800)
