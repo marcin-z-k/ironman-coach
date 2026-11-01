@@ -447,3 +447,4 @@ textarea.paste, .filein { width: 100%; background: var(--card-2); border: 1px so
 .mw-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
 .mw-badge { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #0b0d11; background: #ffd166; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 10px rgba(255,209,102,.5); }
 @media (max-width: 440px) { .sync-status { display: none; } .brand-name { font-size: 16px; } .topbar-right { gap: 6px; } .icon-btn { width: 36px; height: 36px; } }
+.update-bar { position: fixed; left: 50%; top: calc(10px + var(--sat)); transform: translateX(-50%); z-index: 90; background: linear-gradient(90deg, #ff6a3d, #ffb020); color: #0b0d11; border: none; border-radius: 999px; padding: 10px 18px; font-weight: 800; box-shadow: 0 8px 30px rgba(255,106,61,.5); animation: rise .4s ease both; }

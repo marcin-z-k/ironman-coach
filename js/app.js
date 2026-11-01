@@ -266,7 +266,23 @@ document.getElementById('btnFuel').onclick = () => openSheet(renderFuelSheet(ui)
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t.startsWith('trend-')) { keepScrollY = null; render(); window.scrollTo({ top: 0 }); return; } if (TABS.includes(t)) { if (t !== ui.tab) setTab(t); else render(); } });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && data?.fetchedAt && Date.now() - data.fetchedAt > 30 * 60000) sync(); });
 
+// Update check: version.json is fetched uncached; if a newer build is live, offer a reload.
+async function checkUpdate() {
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const v = (await r.json()).version;
+    if (v && window.APP_VERSION && v !== window.APP_VERSION && !document.getElementById('upd')) {
+      const b = el(`<button id="upd" class="update-bar">✨ New version available — tap to reload</button>`);
+      b.onclick = () => location.reload();
+      document.body.append(b);
+    }
+  } catch {}
+}
+setInterval(checkUpdate, 5 * 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+
 (async function boot() {
+  checkUpdate();
   if (location.hash.startsWith('#trend-')) render(); else setTab(ui.tab);
   const restored = await restoreCredentials();
   if (restored) { toast('Signed in'); render(); }

@@ -681,7 +681,7 @@ export function renderSettings(ui, onSave) {
       <button class="btn secondary" type="button" data-pa="import">⇪ Import plan (JSON from your AI)</button>
       <button class="btn secondary" type="button" data-pa="export">⤓ Export current plan (JSON)</button>
       <button class="btn ghost" type="button" data-pa="reset">↺ Reset to default plan</button>
-    </div></div>`));
+    </div><div class="small faint" style="margin-top:12px">App version ${esc(window.APP_VERSION || 'dev')}</div></div>`));
   root.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => ui.planAction(b.dataset.pa));
   const form = root.querySelector('form');
   const syncGoal = () => {
