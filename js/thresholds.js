@@ -6,7 +6,8 @@
 import { isoDate, addDays, parseDate, round, clamp } from './util.js';
 import { getZoneModel } from './zones.js';
 import { isHard } from './history.js';
-import { hrProportional } from './analytics.js';
+import { hrProportional, easyPaceNow } from './analytics.js';
+import { cachedStreams, steadyBlocks, bestWindowWith } from './streams.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -27,29 +28,60 @@ function windowActs(acts, endIso, days) {
 }
 
 export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
-  // INDOOR FTP: only indoor rides with real (device) power — outdoor estimated watts are not comparable
+  // INDOOR FTP from indoor rides with real (device) power — outdoor estimated watts are not comparable.
   const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200 && a.indoor && a.deviceWatts !== false);
   const methods = [];
-  const L = getZoneModel().bike.lthr;
-  // 1) HR-proportional extrapolation of sustained efforts: FTP = NP · (LTHR − HRrest)/(HR − HRrest)
-  //    only rides at ≥ 75% LTHR (short extrapolation), rolling median of the 3 most recent
-  if (L) {
-    const ex = rides.filter(a => (a.np || a.avgW) && a.avgHr >= 0.75 * L).sort((a, b) => b.date.localeCompare(a.date))
-      .map(a => hrProportional(a.np || a.avgW, a.avgHr, s)).filter(v => v && v > cur * 0.6 && v < cur * 1.4).slice(0, 3);
-    if (ex.length) methods.push({ key: 'hrprop', label: 'HR-proportional (last rides)', value: Math.round(median(ex)), weight: ex.length >= 2 ? 0.55 : 0.3, detail: `median of ${ex.length} ride${ex.length > 1 ? 's' : ''}` });
+  const L = getZoneModel().bike.lthr, R = s.restHr || 55;
+  // 1) watts ↔ HR: steady 3-min blocks from all recent indoor rides → line → power at LTHR
+  const blocks = [];
+  for (const a of rides) { const st = cachedStreams(a.id); if (st?.watts && st.hr) blocks.push(...steadyBlocks(st.watts, st.hr, st.time, st.watts.map(w => w != null && w > 30))); }
+  if (L && blocks.length >= 8) {
+    const r = linreg(blocks);
+    if (r && r.b > 0 && r.spread >= 8 && r.r > 0.4) {
+      const v = r.a + r.b * L;
+      if (v > cur * 0.6 && v < cur * 1.6) methods.push({ key: 'blocks', label: `Watts at LTHR ${L} bpm`, value: Math.round(v), weight: r.r > 0.7 ? 0.45 : 0.25, detail: `${blocks.length} steady 3-min blocks, r=${round(r.r, 2)}` });
+    }
   }
-  // 2) intervals.icu rolling eFTP — most recent value from an indoor ride
+  // 2) time: best watts held for 20 / 40 / 60 min (×0.95 / 0.98 / 1.0), small capped HR correction
+  const dur = [];
+  for (const a of rides) {
+    const st = cachedStreams(a.id); if (!st?.watts) continue;
+    const ok = st.watts.map(w => w != null && w > 30);
+    let best = null;
+    for (const [sec, k] of [[1200, 0.95], [2400, 0.98], [3600, 1.0]]) {
+      const w = bestWindowWith(st.watts, st.hr, ok, sec); if (!w) continue;
+      let f = w.mean * k;
+      if (L && w.other > R + 20 && w.other < L) f *= 1 + Math.min(0.12, 0.5 * ((L - R) / (w.other - R) - 1));
+      if (!best || f > best.f) best = { f, min: sec / 60 };
+    }
+    if (best) dur.push(best.f);
+  }
+  if (dur.length) { const top = dur.sort((a, b) => b - a).slice(0, 3); methods.push({ key: 'time', label: 'Watts held 20–60 min', value: Math.round(median(top)), weight: 0.35, detail: `best of ${dur.length} ride${dur.length > 1 ? 's' : ''}` }); }
+  // 3) intervals.icu eFTP (latest indoor ride)
   const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
-  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP', value: withE[0].eftp, weight: 0.3, detail: `latest, ${withE[0].date}` });
-  // 3) per-activity power-model FTP (hard rides only produce a meaningful model)
-  const pm = rides.filter(a => a.pmFtp && a.pmFtp > 50 && a.pmFtp < cur * 1.4).sort((a, b) => b.date.localeCompare(a.date)).map(a => a.pmFtp).slice(0, 3);
-  if (pm.length) methods.push({ key: 'pm', label: 'Power model (recent rides)', value: Math.round(median(pm)), weight: 0.15, detail: `${pm.length} ride${pm.length > 1 ? 's' : ''}` });
-  return combine(methods, cur, 'W');
+  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP', value: withE[0].eftp, weight: 0.2, detail: `latest, ${withE[0].date}` });
+  // fallback without streams: whole-ride NP vs HR (proportional)
+  if (!methods.some(m => m.key === 'blocks' || m.key === 'time') && L) {
+    const ex = rides.filter(a => (a.np || a.avgW) && a.avgHr >= 0.75 * L).sort((a, b) => b.date.localeCompare(a.date)).map(a => hrProportional(a.np || a.avgW, a.avgHr, s)).filter(Boolean).slice(0, 3);
+    if (ex.length) methods.push({ key: 'hrprop', label: 'HR-proportional (whole rides)', value: Math.round(median(ex)), weight: 0.25, detail: `${ex.length} rides, no stream data` });
+  }
+  const res = combine(methods, cur, 'W');
+  // never below what you actually held
+  const t = methods.find(m => m.key === 'time');
+  if (t && res.value != null && res.value < t.value) res.value = t.value;
+  return res;
 }
 
 export function estimateRun(acts, cur, endIso, days = 42) {
-  const runs = windowActs(acts, endIso, days).filter(a => a.sport === 'run' && a.movingSec >= 1200 && a.distanceM > 2000);
+  const runs = windowActs(acts, endIso, days).filter(a => a.sport === 'run' && a.movingSec >= 600 && a.distanceM > 1500);
   const methods = [];
+  // 0) from your easy pace: Z2 sits at the middle of pace zone 2 (as % of threshold speed)
+  const ez = easyPaceNow(acts, endIso);
+  const pz = getZoneModel().run.pace;
+  if (ez && pz) {
+    const frac = ((pz[0] || 77.5) + (pz[1] || 87.7)) / 200;
+    methods.push({ key: 'z2', label: 'From easy pace at Z2 HR', value: Math.round(ez * frac), weight: 0.5, detail: `easy ${Math.floor(ez / 60)}:${String(Math.round(ez % 60)).padStart(2, '0')}/km = ${Math.round(frac * 100)}% of threshold speed` });
+  }
   const pace = a => a.gapSecKm || a.paceSecKm;
   const L = getZoneModel().run.lthr;
   // 1) HR regression: speed vs HR, read off at run LTHR → threshold pace
@@ -126,7 +158,7 @@ export function estimateAll(acts, s, endIso) {
 export function estimateTrend(acts, s, endIso, weeks = 12) {
   // recalculated at every relevant activity (not weekly)
   const from = isoDate(addDays(parseDate(endIso), -7 * weeks));
-  const rel = { ftp: a => a.sport === 'bike' && a.indoor, runThreshold: a => a.sport === 'run', css: a => a.sport === 'swim' && !isOpenWater(a) };
+  const rel = { ftp: a => a.sport === 'bike' && a.indoor, runThreshold: a => a.sport === 'run' && a.movingSec >= 600, css: a => a.sport === 'swim' && !isOpenWater(a) };
   const out = { ftp: [], runThreshold: [], css: [] };
   for (const k of Object.keys(out)) {
     const dates = [...new Set(acts.filter(a => a.date >= from && a.date <= endIso && rel[k](a)).map(a => a.date))].sort();

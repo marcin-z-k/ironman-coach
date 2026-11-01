@@ -351,13 +351,23 @@ export function renderProgress(A, ui, data) {
 }
 
 // ---- what-if race simulator -----------------------------------------------------
+// Simulator inputs are the user's: stored in settings, never touched by new estimates.
+// Only the "Estimate" button overwrites them (all sliders + wetsuit) with the current estimates.
+function simEstimates(s, b) {
+  return { ftp: s.ftp, css: s.css, thr: s.runThreshold, swimCont: b.swimCont, runCont: round(b.runCont, 1), wetsuit: true, at: isoDate(new Date()) };
+}
 function simulatorCard(A, ui) {
-  const s = load();
+  let s = load();
   const b = A.goal.base;
-  const d = ui.sim ||= { ftp: 0, css: 0, thr: 0, swimCont: b.swimCont, runCont: round(b.runCont, 1), wetsuit: true };
+  const est = simEstimates(s, b);
+  if (!s.sim) s = save({ sim: { ...est } });
+  const d = { ...est, ...s.sim };                       // stored user values win
+  const persist = () => { save({ sim: { ...d } }); };
+  const delta = () => ({ ftp: d.ftp - s.ftp, css: d.css - s.css, thr: d.thr - s.runThreshold, swimCont: d.swimCont, runCont: d.runCont, wetsuit: d.wetsuit });
   const goal = (s.goalHours || 12) * 3600;
+  const lo = (k, v) => Math.min(v, d[k]), hi = (k, v) => Math.max(v, d[k]);
   const card = h(`<div class="card hero sim">
-    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn ghost small" data-reset>Reset</button></div>
+    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn small" data-est title="Replace all slider values and the wetsuit setting with the current estimates">Estimate</button></div>
     <div class="row between" style="margin-top:6px"><div class="big mono" data-o="total"></div><span class="pill" data-o="gap"></span></div>
     <div class="splitbar" data-o="bar"><span class="sw"></span><span class="bk"></span><span class="rn"></span><span class="tr"></span><i class="goal"></i></div>
     <div class="split" style="margin-top:12px">
@@ -367,27 +377,29 @@ function simulatorCard(A, ui) {
       <div class="metric"><div class="v" data-o="trans"></div><div class="k">Transitions</div></div>
     </div>
     <div class="sliders">
-      ${slider('ftp', 'Bike FTP', -30, 80, 1)}
-      ${slider('css', 'Swim CSS / pace', -20, 15, 1)}
-      ${slider('thr', 'Run threshold', -90, 30, 1)}
-      ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim), 100)}
-      ${slider('runCont', 'Continuous run', 3, Math.max(42.2, D0g(s).run), 0.2)}
+      ${slider('ftp', 'Bike FTP', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
+      ${slider('css', 'Swim CSS', lo('css', est.css - 20), hi('css', est.css + 15), 1)}
+      ${slider('thr', 'Run threshold', lo('thr', est.thr - 90), hi('thr', est.thr + 30), 1)}
+      ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim, d.swimCont), 100)}
+      ${slider('runCont', 'Continuous run', 3, Math.max(42.2, D0g(s).run, d.runCont), 0.2)}
       <label class="toggle"><input type="checkbox" data-k="wetsuit" ${d.wetsuit ? 'checked' : ''}> Wetsuit swim</label>
     </div>
+    <div class="small muted" data-o="estnote" style="margin-top:8px"></div>
     <details class="more" style="margin-top:10px"><summary>How this is calculated</summary><div class="small muted" style="line-height:1.55">
-      <b>Swim</b> — your session pace (${esc(b.notes.swim)}). Beyond the distance you can swim without stopping, pace fades ~8% per doubling and each forced stop costs ~25 s. Wetsuit −5%.<br>
+      Slider values are yours and are kept across syncs and app updates. <b>Estimate</b> replaces all of them (incl. wetsuit) with the current estimates.<br>
+      <b>Swim</b> — your pool session pace (${esc(b.notes.swim)}). Beyond the distance you can swim without stopping, pace fades ~8% per doubling and each forced stop costs ~25 s. Wetsuit −5%.<br>
       <b>Bike</b> — speed of your long outdoor rides (${esc(b.notes.bike)}), +2% race day. FTP changes scale speed with the cube root of power.<br>
-      <b>Run</b> — easy pace at Z2 HR (${esc(b.notes.run)}), +6% off the bike, for the distance you can run continuously (your longest recent run ${b.runLongestKm} km × 1.25); after that run/walk at 1.35× easy pace.<br>
+      <b>Run</b> — easy pace at Z2 HR (${esc(b.notes.run)}), +6% off the bike. Continuous run estimate: ${esc(b.notes.runCont || '')}. Stretches slower than 9:00/km for over 2 min count as walking (short GPS glitches don't). Beyond that distance: run/walk at 1.35× easy pace. Moving the run threshold shifts easy pace by the same amount.<br>
       <b>Transitions</b> 12 min.</div></details>
   </div>`);
   const out = k => card.querySelector(`[data-o="${k}"]`);
-  const D0 = predict(b, s, d).D;
+  const D0 = predict(b, s, delta()).D;
   if (!D0.swim) { card.querySelector('[data-o="swim"]').closest('.metric').remove(); card.querySelector('[data-k="css"]').closest('.sl').remove(); card.querySelector('[data-k="swimCont"]').closest('.sl').remove(); card.querySelector('[data-k="wetsuit"]').closest('label').remove(); }
   if (!D0.bike) { card.querySelector('[data-o="bike"]').closest('.metric').remove(); card.querySelector('[data-k="ftp"]').closest('.sl').remove(); }
   if (!D0.run) { card.querySelector('[data-o="run"]').closest('.metric').remove(); card.querySelector('[data-k="thr"]').closest('.sl').remove(); card.querySelector('[data-k="runCont"]').closest('.sl').remove(); }
   if (!D0.trans) card.querySelector('[data-o="trans"]').closest('.metric').remove();
   const update = () => {
-    const p = predict(b, s, d);
+    const p = predict(b, s, delta());
     out('total').textContent = fmtSec(p.totalSec);
     const diff = p.totalSec - goal;
     out('total').className = 'big mono ' + (diff <= 0 ? 'sport-run' : 'sport-bike');
@@ -395,7 +407,7 @@ function simulatorCard(A, ui) {
     out('gap').className = 'pill ' + (diff <= 0 ? 'good' : 'warn');
     const set = (k, v) => { const e = out(k); if (e) e.textContent = v; };
     set('swim', fmtSec(p.swimSec));
-    if (out('swimk')) out('swimk').textContent = `Swim · ${paceToStr(p.swim.effPace)}/100m avg${p.swim.cont < 3800 ? ` · ${Math.floor(3800 / p.swim.cont - 1)} stops` : ''}`;
+    if (out('swimk')) out('swimk').textContent = `Swim · ${paceToStr(p.swim.effPace)}/100m avg${p.swim.cont < (p.D.swim || 3800) ? ` · ${Math.floor((p.D.swim || 3800) / p.swim.cont - 1)} stops` : ''}`;
     set('bike', fmtSec(p.bikeSec));
     set('bikek', `Bike · ${p.bike.kmh} km/h${p.D.hm ? ` · ${p.D.hm} hm` : ''}`);
     set('run', fmtSec(p.runSec));
@@ -408,16 +420,23 @@ function simulatorCard(A, ui) {
     bar.querySelector('.tr').style.width = (p.transSec / tot * 100) + '%';
     bar.querySelector('.goal').style.left = (goal / tot * 100) + '%';
     const lab = {
-      ftp: `${s.ftp + d.ftp} W ${sign(d.ftp, ' W')}`,
-      css: `CSS ${paceToStr(s.css + d.css)} · pace ${paceToStr(b.swimPace + d.css)}`,
-      thr: `${paceToStr(s.runThreshold + d.thr)}/km · easy ${paceToStr(b.runEasy + d.thr)}`,
+      ftp: `${d.ftp} W`,
+      css: `${paceToStr(d.css)}/100m · pace ${paceToStr(b.swimPace + d.css - s.css)}`,
+      thr: `${paceToStr(d.thr)}/km · easy ${paceToStr(b.runEasy + d.thr - s.runThreshold)}`,
       swimCont: d.swimCont >= (D0.swim || 3800) ? `full ${((D0.swim || 3800) / 1000).toFixed(1)} km` : `${d.swimCont} m`, runCont: d.runCont >= (D0.run || 42.2) ? `full ${D0.run || 42.2} km` : `${round(d.runCont, 1)} km`,
     };
     for (const k in lab) { const e = card.querySelector(`[data-v="${k}"]`); if (e) e.textContent = lab[k]; }
+    const diffs = [];
+    if (D0.bike && d.ftp !== est.ftp) diffs.push(`FTP ${est.ftp} W`);
+    if (D0.swim && d.css !== est.css) diffs.push(`CSS ${paceToStr(est.css)}`);
+    if (D0.run && d.thr !== est.thr) diffs.push(`threshold ${paceToStr(est.thr)}/km`);
+    if (D0.swim && d.swimCont !== est.swimCont) diffs.push(`swim ${est.swimCont} m`);
+    if (D0.run && round(d.runCont, 1) !== est.runCont) diffs.push(`run ${est.runCont} km`);
+    out('estnote').textContent = diffs.length ? `Your values. Current estimates: ${diffs.join(' · ')} — tap Estimate to use them.` : 'Using current estimates.';
   };
-  card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; });
-  const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; update(); };
-  card.querySelector('[data-reset]').onclick = () => { ui.sim = null; ui.keepScroll(); ui.rerender(); };
+  card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; inp.onchange = persist; });
+  const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; persist(); update(); };
+  card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b) } }); ui.keepScroll(); ui.rerender(); };
   update();
   return card;
 }
@@ -494,7 +513,7 @@ function thresholdCard(data, ui) {
   const log = (s.thresholdLog || []).slice(0, 8);
   const lab2 = { ...Object.fromEntries(Object.entries(lbl).map(([k, v]) => [k, v[0]])), ftpOutdoor: 'Outdoor FTP' };
   if (log.length) card.append(h(`<details class="more" style="margin-top:10px"><summary>Change history (${(s.thresholdLog || []).length})</summary><div class="stack small muted">${log.map(l => `<div>${fmtDate(l.date)} · ${lab2[l.field] || l.field} ${fmt(l.field === 'ftpOutdoor' ? 'ftp' : l.field, l.from)} → <b style="color:var(--text)">${fmt(l.field === 'ftpOutdoor' ? 'ftp' : l.field, l.to)}</b> <span class="faint">(${esc(l.source)})</span></div>`).join('')}</div></details>`));
-  card.append(h(`<div class="small faint" style="margin-top:8px">Indoor FTP is estimated from indoor rides with real power only. Outdoor rides without a power meter are judged by heart rate and speed. A value you type in Settings is kept for 4 weeks before estimates may change it.</div>`));
+  card.append(h(`<div class="small faint" style="margin-top:8px">Indoor FTP: the watts you hold at threshold heart rate (steady 3-min blocks) and the best watts you held for 20–60 min, recalculated after every indoor ride. Outdoor rides without a power meter count only via the indoor↔outdoor card. A value you type in Settings is kept for 4 weeks before estimates may change it.</div>`));
   return card;
 }
 
@@ -563,7 +582,7 @@ function couplingCard(acts, ui) {
   const c = ftpCoupling(acts, s);
   const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Bike FTP · indoor ↔ outdoor</div><button class="btn ghost small" data-recal>Recalibrate</button></div></div>`);
   card.querySelector('[data-recal]').onclick = () => { save({ ftpCoupling: null }); ui.toast('Recalibrating outdoor/indoor ratio'); ui.invalidate(); };
-  if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs at least two outdoor rides ≥ 1 h with heart rate (or an outdoor FTP in Settings) to calibrate.</div>`)); return card; }
+  if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs an outdoor ride ≥ 30 min with speed and elevation data in the last 10 weeks (or an outdoor FTP in Settings). Outdoor FTP = best power held for 20–60 min on flat stretches (≤1.5 % grade), computed from speed (CdA 0.35).</div>`)); return card; }
   const pct = Math.round((c.ratio - 1) * 100);
   card.append(h(`<div><div class="dmetrics" style="margin-top:10px">
       <div class="metric"><div class="v" style="color:var(--bike)">${s.ftp} W</div><div class="k">Indoor FTP</div></div>

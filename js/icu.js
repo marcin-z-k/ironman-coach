@@ -61,7 +61,8 @@ export function sportOf(type = '') {
   const t = type.toLowerCase();
   if (t.includes('swim')) return 'swim';
   if (t.includes('ride') || t.includes('bike') || t.includes('cycl') || t === 'virtualride') return 'bike';
-  if (t.includes('run') || t.includes('walk') || t.includes('hike')) return 'run';
+  if (t.includes('run')) return 'run';
+  if (t.includes('walk') || t.includes('hike')) return 'walk';   // counts for load, not for run analytics
   if (t.includes('weight') || t.includes('strength') || t.includes('workout') || t.includes('yoga')) return 'strength';
   return 'other';
 }

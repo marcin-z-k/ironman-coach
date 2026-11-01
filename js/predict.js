@@ -7,7 +7,7 @@
 //        then run/walk at ~1.35× easy pace. Threshold changes shift easy pace 1:1.
 import { isoDate, addDays, round, clamp } from './util.js';
 import { hrZoneOf } from './zones.js';
-import { easyPaceSeries } from './analytics.js';
+import { easyPaceSeries, continuousRun } from './analytics.js';
 import { raceDistances } from './goals.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -41,7 +41,11 @@ export function baseline(acts, s) {
   out.notes.run = eps.length >= 2 ? `median Z2-HR pace of your last ${eps.length} runs` : 'recent runs (no Z2 data yet)';
   const longRuns = since(acts, 56).filter(a => a.sport === 'run' && a.distanceM > 0 && (a.paceSecKm || a.gapSecKm)).map(a => a.distanceM / 1000);
   out.runLongestKm = longRuns.length ? round(Math.max(...longRuns), 1) : 10;
-  out.runCont = clamp(round((s.runContinuous || out.runLongestKm * 1.25), 1), 5, 42.2);
+  // continuous running = longest stretch without walking (> 2 min slower than 9:00/km), +10 % race-day boost
+  const cr = continuousRun(acts, 56);
+  out.runContInfo = cr;
+  out.runCont = clamp(round(s.runContinuous || (cr ? cr.km * 1.1 : Math.min(out.runLongestKm, 8)), 1), 3, 42.2);
+  out.notes.runCont = s.runContinuous ? 'your Settings value' : cr ? `longest stretch without walking: ${cr.km} km (${cr.run.date})${cr.withWalk ? ` · ${cr.withWalk} recent run${cr.withWalk > 1 ? 's' : ''} with walk breaks` : ''}` : 'no run data';
   return out;
 }
 

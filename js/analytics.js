@@ -2,7 +2,7 @@
 // indoor/outdoor FTP coupling. Pure functions on normalised activities / wellness.
 import { load, getCache, setCache } from './store.js';
 import { collapse, plannedDist, getZoneModel, hrZoneOf } from './zones.js';
-import { cachedStreams, z2Pace } from './streams.js';
+import { cachedStreams, z2PaceRun, longestContinuousRun, bestWindowWith, bestWindowFrac, runMask } from './streams.js';
 import { isoDate, addDays, startOfWeek, parseDate, round, clamp } from './util.js';
 
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
@@ -137,49 +137,58 @@ function physicsPower(v, sinA, m) {
   const cos = Math.sqrt(1 - sinA * sinA);
   return Math.max(0, 0.5 * RHO * CDA * v ** 3 + CRR * m * G * v * cos + m * G * v * sinA) / ETA;
 }
-export function outdoorRidePower(a, s) {
-  const m = (s.weightKg || 75) + 9;
-  const st = cachedStreams(a.id);
-  if (st?.speed && st.hr && st.n > 600) {
-    const vs = [], hs = [];
-    for (let i = 0; i < st.n; i++) { const v = st.speed[i], h = st.hr[i]; if (v > 3 && v < 20 && h > 60) { vs.push(v); hs.push(h); } }
-    if (vs.length > 600) {
-      const v = median(vs), hr = median(hs);
-      // average positive grade from the altitude stream (smoothed over ~200 m)
-      let climb = 0, dist = 0;
-      if (st.alt && st.dist) { let lastA = st.alt[0], lastD = st.dist[0]; for (let i = 1; i < st.n; i++) { if (st.dist[i] - lastD >= 200) { const dh = st.alt[i] - lastA; if (dh > 0) climb += dh; dist += st.dist[i] - lastD; lastA = st.alt[i]; lastD = st.dist[i]; } } }
-      const sinA = dist > 0 ? Math.min(0.08, climb / dist / 2) : 0;   // half the route climbs, the other half descends
-      return { P: physicsPower(v, sinA, m), hr, v, src: 'streams' };
-    }
+// Per-sample power from speed on FLAT road (|grade| ≤ 1.5 %), stops and GPS spikes excluded.
+export function flatPowerSeries(st, m) {
+  if (!st?.speed || st.n < 600) return null;
+  const P = new Array(st.n).fill(null), ok = new Array(st.n).fill(false);
+  // grade over ~100 m
+  const grade = new Array(st.n).fill(null);
+  if (st.alt && st.dist) { let j = 0; for (let i = 0; i < st.n; i++) { while (j < i && st.dist[i] - st.dist[j] > 100) j++; const dd = st.dist[i] - st.dist[j]; if (dd >= 50) grade[i] = (st.alt[i] - st.alt[j]) / dd; } }
+  for (let i = 0; i < st.n; i++) {
+    const v = st.speed[i];
+    if (!(v > 4 && v < 18)) continue;
+    if (grade[i] != null && Math.abs(grade[i]) > 0.015) continue;
+    P[i] = physicsPower(v, 0, m); ok[i] = true;
   }
-  if (!a.distanceM || !a.movingSec || !a.avgHr) return null;
-  const v = a.distanceM / a.movingSec;
-  const sinA = Math.min(0.08, (a.elev || 0) / a.distanceM / 2);
-  return { P: physicsPower(v, sinA, m), hr: a.avgHr, v, src: 'averages' };
+  return { P, ok };
 }
+// Outdoor FTP (no power meter), time-based:
+//   best power you held on flat stretches for 20 / 40 / 60 min (from speed, CdA 0.35)
+//   → FTP ≈ P20·0.95 / P40·0.98 / P60·1.00 (highest), with a small, capped HR correction when the
+//   effort was clearly below threshold HR (+¼ of the HR-reserve gap, max +5 %).
 export function outdoorFtpEstimate(acts, s) {
   const from = isoDate(addDays(new Date(), -70));
-  const est = [];
+  const L = getZoneModel().bike.lthr, R = s.restHr || 55;
+  const m = (s.weightKg || 75) + 9;
+  const rides = [];
   for (const a of acts) {
-    if (a.sport !== 'bike' || a.indoor || a.date < from || a.movingSec < 3600 || !a.avgHr) continue;
-    const r = outdoorRidePower(a, s);
-    if (!r || r.v < 5 || r.v > 14) continue;
-    const ftp = hrProportional(r.P, r.hr, s);
-    if (!ftp || ftp < 80 || ftp > 400) continue;
-    est.push({ ftp, P: r.P, date: a.date, src: r.src });
+    if (a.sport !== 'bike' || a.indoor || a.date < from || a.movingSec < 1800) continue;
+    const st = cachedStreams(a.id);
+    const fp = flatPowerSeries(st, m);
+    if (!fp) continue;
+    let best = null;
+    for (const [sec, k] of [[1200, 0.95], [2400, 0.98], [3600, 1.0]]) {
+      const w = bestWindowFrac(fp.P, st.hr, fp.ok, sec, 0.6);
+      if (!w) continue;
+      let ftp = w.mean * k;
+      if (L && w.other && w.other > R + 20 && w.other < L) ftp *= 1 + Math.min(0.05, 0.25 * ((L - R) / (w.other - R) - 1));
+      if (!best || ftp > best.ftp) best = { ftp, P: w.mean, hr: Math.round(w.other), min: sec / 60 };
+    }
+    if (best && best.ftp > 70 && best.ftp < 400) rides.push({ ...best, date: a.date });
   }
-  if (est.length < 2) return null;
-  est.sort((x, y) => y.date.localeCompare(x.date));
-  const recent = est.slice(0, 5);   // rolling: last 5 qualifying rides
-  return { ftp: Math.round(median(recent.map(e => e.ftp))), avgP: Math.round(median(recent.map(e => e.P))), n: recent.length, fromStreams: recent.filter(e => e.src === 'streams').length };
+  if (!rides.length) return null;
+  rides.sort((x, y) => y.ftp - x.ftp);
+  const top = rides.slice(0, 3);
+  return { ftp: Math.round(median(top.map(r => r.ftp))), avgP: Math.round(median(top.map(r => r.P))), n: rides.length, best: top[0], method: 'flat speed held 20–60 min' };
 }
 
 export function ftpCoupling(acts, s) {
   const target = s.raceTargetW || 230;
-  let c = s.ftpCoupling;
+  // Only a value YOU entered freezes the ratio; automatic estimates are recalculated on every sync.
+  let c = s.ftpCoupling?.source === 'your outdoor FTP' ? s.ftpCoupling : null;
   const est = outdoorFtpEstimate(acts, s);
   if (s.outdoorPower && s.ftpOutdoor) c = { ratio: s.ftpOutdoor / s.ftp, outdoor: s.ftpOutdoor, indoor: s.ftp, source: 'power meter' };
-  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.8, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: 'speed + HR physics estimate' };
+  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: `flat-road speed you held ${est.best.min} min (${Math.round(est.best.P)} W at ${est.best.hr} bpm)` };
   if (!c) return { target, est, ratio: null };
   const outdoorNow = Math.round(s.ftp * c.ratio);
   const indoorTarget = Math.round(target / c.ratio);
@@ -187,22 +196,45 @@ export function ftpCoupling(acts, s) {
 }
 
 // ---- easy pace at Z2 HR (per run) ---------------------------------------------------
-// Preferred: median pace of the stream samples inside HR Z2 (first 5 min and GPS outliers dropped).
-// Fallback (no streams yet): whole-run pace if the average HR is in Z2. Heat-corrected (EnviroNorm).
-export function easyPaceSeries(acts, days = 120) {
-  const from = isoDate(addDays(new Date(), -days));
+// One value for EVERY run ≥ 10 min:
+//  streams → median pace of Z2-HR windows (walking > 2 min at > 9:00/km excluded), or the run's own
+//            pace↔HR line read at mid-Z2 when it barely touched Z2 (e.g. a short hard run)
+//  no streams → average pace corrected to mid-Z2 HR (~0.6 % per bpm)
+// Heat-corrected (EnviroNorm).
+export function easyPaceSeries(acts, days = 120, endIso = isoDate(new Date())) {
+  const from = isoDate(addDays(parseDate(endIso), -days));
+  const z = getZoneModel().run.hr;
   const out = [];
   for (const a of acts) {
-    if (a.sport !== 'run' || a.date < from || a.movingSec < 1200) continue;
+    if (a.sport !== 'run' || a.date < from || a.date > endIso || a.movingSec < 600) continue;
     const st = cachedStreams(a.id);
-    const z = st ? z2Pace(st) : null;
-    let pace = z?.pace ?? null, src = 'z2 samples';
-    if (pace == null && !st) {
+    let r = st ? z2PaceRun(st, z) : null;
+    if (!r && !st) {
       const p = a.gapSecKm || a.paceSecKm;
-      if (p && a.avgHr && hrZoneOf('run', a.avgHr) === 2) { pace = p; src = 'run average'; }
+      if (p && a.avgHr && z) { const mid = (z[0] + z[1]) / 2; r = { pace: p * (1 + 0.006 * (a.avgHr - mid)), src: 'average' }; }
     }
-    if (pace == null || pace < 240 || pace > 720) continue;
-    out.push({ x: a.date, y: Math.round(pace / heatFactor(a)), id: a.id, src });
+    if (!r || r.pace < 240 || r.pace > 720) continue;
+    out.push({ x: a.date, y: Math.round(r.pace / heatFactor(a)), id: a.id, src: r.src, name: a.name });
   }
   return out.sort((a, b) => a.x.localeCompare(b.x));
+}
+// rolling easy pace = median of the last 5 runs
+export function easyPaceNow(acts, endIso) {
+  const pts = easyPaceSeries(acts, 120, endIso).slice(-5).map(p => p.y);
+  return pts.length ? median(pts) : null;
+}
+
+// ---- how far can the athlete run without walking -----------------------------------------
+export function continuousRun(acts, days = 56) {
+  const from = isoDate(addDays(new Date(), -days));
+  const res = [];
+  for (const a of acts) {
+    if (a.sport !== 'run' || a.date < from || a.movingSec < 600) continue;
+    const st = cachedStreams(a.id);
+    if (st) { const c = longestContinuousRun(st); if (c) res.push({ km: c.km, walkMin: c.walkMin, date: a.date, name: a.name, src: 'streams' }); }
+    else if (a.distanceM && a.paceSecKm && a.paceSecKm < 540) res.push({ km: a.distanceM / 1000 * 0.9, walkMin: null, date: a.date, name: a.name, src: 'average' });
+  }
+  if (!res.length) return null;
+  const best = res.reduce((m, r) => r.km > m.km ? r : m, res[0]);
+  return { km: Math.round(best.km * 10) / 10, run: best, runs: res.length, withWalk: res.filter(r => r.walkMin > 2).length };
 }
