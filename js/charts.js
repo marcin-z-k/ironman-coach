@@ -152,7 +152,7 @@ export function streamChart(o) {
   const base = o.invert ? pad.t : H - pad.b;
   svg += `<path class="fadein" d="${line} L${X(x1)},${base} L${X(x0)},${base} Z" fill="url(#${gid})"/>`;
   svg += `<path class="draw" pathLength="1" d="${line}" fill="none" stroke="${o.color}" stroke-width="1.8" stroke-linejoin="round" filter="url(#${gid}f)"/>`;
-  if (o.avg != null) svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(o.avg)}" y2="${Y(o.avg)}" stroke="#fff" stroke-opacity=".55" stroke-dasharray="4 4"/><text x="${W - pad.r - 2}" y="${Y(o.avg) - 4}" fill="#cfd5df" font-size="10" text-anchor="end">avg ${esc(fmt(o.avg))}</text>`;
+  if (o.avg != null) svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(o.avg)}" y2="${Y(o.avg)}" stroke="#fff" stroke-opacity=".6" stroke-width="1.2" stroke-dasharray="5 4"/>`;
   [0, 0.5, 1].forEach(f => { const v = x0 + (x1 - x0) * f; svg += `<text x="${X(v)}" y="${H - 5}" fill="#5d6678" font-size="10" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${xf(v)}</text>`; });
   wrap.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">${svg}<g class="hover" visibility="hidden"><line class="cx" y1="${pad.t}" y2="${H - pad.b}" stroke="#cfd5df"/><circle class="cd" r="4" fill="${o.color}" stroke="#0b0d11" stroke-width="2"/></g></svg><div class="tip" hidden></div>`;
   const svgEl = wrap.querySelector('svg'), tip = wrap.querySelector('.tip'), g = wrap.querySelector('.hover');

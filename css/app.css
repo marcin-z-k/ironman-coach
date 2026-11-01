@@ -407,3 +407,43 @@ body.noscroll { overflow: hidden; }
 @media (max-width: 520px) { .hrz { grid-template-columns: repeat(3, 1fr); } }
 
 .temp-in, .an-card input { background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; color: var(--text); }
+
+/* ---------- centered modal (replaces side sheet) ---------- */
+.sheet-panel { top: 50%; left: 50%; right: auto; bottom: auto; width: min(760px, calc(100vw - 24px)); max-height: min(92vh, 1100px); border: 1px solid #2b3240; border-radius: 26px; transform: translate(-50%, -46%) scale(.96); opacity: 0; transition: transform .32s cubic-bezier(.22,.9,.3,1), opacity .25s ease; box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03); padding: 16px 16px 24px; }
+.sheet.open .sheet-panel { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+@media (max-width: 640px) { .sheet-panel { width: calc(100vw - 16px); max-height: calc(100dvh - 24px - var(--sat) - var(--sab)); border-radius: 22px; } }
+.map { pointer-events: none; }
+.map .leaflet-control-attribution { pointer-events: auto; }
+
+/* chart headers with bold average */
+.chart-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; }
+.avg-pill { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 800; font-size: 14px; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); text-shadow: 0 0 10px color-mix(in srgb, var(--c) 60%, transparent); font-variant-numeric: tabular-nums; }
+.avg-pill span { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; opacity: .8; text-shadow: none; }
+
+/* top-bar active settings */
+.icon-btn.on { color: var(--accent); border-color: rgba(255,106,61,.5); }
+
+/* load management explanation */
+.lm-explain { font-size: 12.5px; line-height: 1.5; color: var(--muted); margin: -2px 0 12px; }
+
+/* settings: segmented plan source, goal box, iOS switch */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.seg-opt { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; background: var(--card-2); border: 1px solid var(--line); cursor: pointer; transition: border-color .2s, background .2s; }
+.seg-opt input { display: none; }
+.seg-opt b { font-size: 14px; } .seg-opt span { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg-opt.on { border-color: var(--accent); background: rgba(255,106,61,.10); box-shadow: 0 0 18px rgba(255,106,61,.15); }
+.seg-opt:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.goalbox { padding: 12px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); }
+.switch-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--card-2); border: 1px solid var(--line); cursor: pointer; }
+input.ios { -webkit-appearance: none; appearance: none; width: 51px !important; height: 31px; border-radius: 16px; background: #39404c; position: relative; flex-shrink: 0; cursor: pointer; transition: background .25s; border: none; padding: 0; }
+input.ios::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.4); transition: transform .25s cubic-bezier(.3,1.4,.6,1); }
+input.ios:checked { background: #34c759; box-shadow: 0 0 14px rgba(52,199,89,.45); }
+input.ios:checked::after { transform: translateX(20px); }
+textarea.paste, .filein { width: 100%; background: var(--card-2); border: 1px solid var(--line); border-radius: 12px; color: var(--text); padding: 10px 12px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.adjust-banner ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* MyWhoosh hint */
+.mw { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: rgba(255,214,102,.07); border: 1px solid rgba(255,214,102,.28); }
+.mw-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.mw-badge { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #0b0d11; background: #ffd166; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 10px rgba(255,209,102,.5); }
+@media (max-width: 440px) { .sync-status { display: none; } .brand-name { font-size: 16px; } .topbar-right { gap: 6px; } .icon-btn { width: 36px; height: 36px; } }

@@ -8,6 +8,7 @@
 import { isoDate, addDays, round, clamp } from './util.js';
 import { hrZoneOf } from './zones.js';
 import { easyPaceSeries } from './analytics.js';
+import { raceDistances } from './goals.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const since = (acts, days) => { const f = isoDate(addDays(new Date(), -days)); return acts.filter(a => a.date >= f); };
@@ -46,29 +47,40 @@ export function baseline(acts, s) {
 
 // d: deltas from the simulator { ftp: W, css: s/100m, thr: s/km, swimCont: m, runCont: km, wetsuit: bool }
 export function predict(b, s, d = {}) {
+  const D = raceDistances(s);
   // swim
   const swimPace = clamp(b.swimPace + (d.css || 0), 75, 240);
-  const cont = clamp(d.swimCont ?? b.swimCont, 100, 4000);
-  const fade = cont >= 3800 ? 1.02 : 1 + 0.08 * Math.log2(3800 / cont);
-  const stops = cont >= 3800 ? 0 : Math.floor(3800 / cont - 1) * 25;
-  const wetsuit = d.wetsuit ?? true;
-  const swimSec = 38 * swimPace * fade * (wetsuit ? 0.95 : 1) + stops;
+  const cont = clamp(d.swimCont ?? b.swimCont, 100, 10000);
+  let swimSec = 0, fade = 1, stops = 0;
+  const wetsuit = d.wetsuit ?? !!D.tri;
+  if (D.swim) {
+    fade = cont >= D.swim ? 1.02 : 1 + 0.08 * Math.log2(D.swim / cont);
+    stops = cont >= D.swim ? 0 : Math.floor(D.swim / cont - 1) * 25;
+    swimSec = D.swim / 100 * swimPace * fade * (wetsuit ? 0.95 : 1) + stops;
+  }
   // bike
   const ftp0 = s.ftp, ftp1 = Math.max(60, s.ftp + (d.ftp || 0));
-  let kmh = b.bikeKmh * Math.pow(ftp1 / ftp0, 1 / 3) * 1.02;
-  if (b.bikeLongestKm && b.bikeLongestKm < 180) kmh *= 1 - 0.03 * Math.log2(180 / Math.max(60, b.bikeLongestKm));
-  const bikeSec = 180 / kmh * 3600;
+  let kmh = b.bikeKmh * Math.pow(ftp1 / ftp0, 1 / 3) * 1.02, bikeSec = 0;
+  if (D.bike) {
+    if (b.bikeLongestKm && b.bikeLongestKm < D.bike) kmh *= 1 - 0.03 * Math.log2(D.bike / Math.max(60, b.bikeLongestKm));
+    bikeSec = D.bike / kmh * 3600 + (D.hm || 0) / 700 * 3600 * 0.45;    // climbing: ~700 m/h VAM, part of it already in the speed
+  }
   // run
-  const easy = clamp(b.runEasy + (d.thr || 0), 240, 720);   // sane bounds: 4:00–12:00/km
-  const runCont = clamp(d.runCont ?? b.runCont, 3, 42.2) >= 42.2 ? 42.195 : clamp(d.runCont ?? b.runCont, 3, 42.2);
-  const runPace = easy * 1.06 * 1.03;      // off the bike + drift
-  const walkPace = easy * 1.35;           // run/walk
-  const runSec = Math.min(runCont, 42.195) * runPace + Math.max(0, 42.195 - runCont) * walkPace;
-  const trans = 12 * 60;
+  let runSec = 0, easy = clamp(b.runEasy + (d.thr || 0), 240, 720), runPace = 0, walkPace = 0;
+  const runCont = Math.min(D.run || 42.195, clamp(d.runCont ?? b.runCont, 3, 400));
+  if (D.run) {
+    if (D.fresh) {   // stand-alone run: race pace from threshold by distance
+      const thr = clamp(s.runThreshold + (d.thr || 0), 200, 600), km = D.run;
+      const f = km <= 5 ? 0.97 : km <= 10 ? 1.0 : km <= 21.1 ? 1.05 : km <= 42.2 ? 1.12 : 1.25 + Math.min(0.35, (km - 42.2) / 300);
+      runPace = thr * f; walkPace = Math.max(runPace * 1.35, easy * 1.3);
+    } else { runPace = easy * 1.06 * 1.03; walkPace = easy * 1.35; }   // off the bike + drift; run/walk beyond the limit
+    runSec = Math.min(runCont, D.run) * runPace + Math.max(0, D.run - runCont) * walkPace;
+  }
+  const trans = (D.trans || 0) * 60;
   return {
-    swimSec, bikeSec, runSec, transSec: trans, totalSec: swimSec + bikeSec + runSec + trans,
-    swim: { pace: swimPace, effPace: swimSec / 38, cont, fade, stops, wetsuit },
+    D, swimSec, bikeSec, runSec, transSec: trans, totalSec: swimSec + bikeSec + runSec + trans,
+    swim: { pace: swimPace, effPace: D.swim ? swimSec / (D.swim / 100) : 0, cont, fade, stops, wetsuit },
     bike: { kmh: round(kmh, 1), ftp: ftp1 },
-    run: { easy, runPace, walkPace, runCont, walkKm: round(Math.max(0, 42.195 - runCont), 1) },
+    run: { easy, runPace, walkPace, runCont, walkKm: round(Math.max(0, (D.run || 0) - runCont), 1) },
   };
 }

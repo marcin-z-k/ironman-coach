@@ -6,6 +6,7 @@
 import { isoDate, addDays, parseDate, round, clamp } from './util.js';
 import { getZoneModel } from './zones.js';
 import { isHard } from './history.js';
+import { hrProportional } from './analytics.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -25,26 +26,24 @@ function windowActs(acts, endIso, days) {
   return acts.filter(a => a.date > from && a.date <= endIso);
 }
 
-export function estimateBike(acts, cur, endIso, days = 42) {
+export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
   // INDOOR FTP: only indoor rides with real (device) power — outdoor estimated watts are not comparable
   const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200 && a.indoor && a.deviceWatts !== false);
   const methods = [];
-  // 1) intervals.icu rolling eFTP — most recent value
-  const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
-  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP (indoor rides)', value: withE[0].eftp, weight: 0.45, detail: `latest, ${withE[0].date}` });
-  // 2) per-activity power-model FTP — median of the top 3 (only hard rides produce a meaningful model)
-  const pm = rides.filter(a => a.pmFtp && a.pmFtp > 50).map(a => a.pmFtp).sort((a, b) => b - a).slice(0, 3);
-  if (pm.length) methods.push({ key: 'pm', label: 'Power model (best rides)', value: Math.round(median(pm)), weight: pm.length >= 2 ? 0.3 : 0.15, detail: `${pm.length} ride${pm.length > 1 ? 's' : ''}` });
-  // 3) HR regression: NP vs avg HR on steady rides, read off at bike LTHR
   const L = getZoneModel().bike.lthr;
+  // 1) HR-proportional extrapolation of sustained efforts: FTP = NP · (LTHR − HRrest)/(HR − HRrest)
+  //    only rides at ≥ 75% LTHR (short extrapolation), rolling median of the 3 most recent
   if (L) {
-    const pts = rides.filter(a => a.np && a.avgHr && (a.vi == null || a.vi < 1.15)).map(a => [a.avgHr, a.np]);
-    const r = linreg(pts);
-    if (r && r.b > 0 && r.r > 0.5 && r.spread >= 8) {
-      const v = r.a + r.b * L;
-      if (v > cur * 0.7 && v < cur * 1.35) methods.push({ key: 'hr', label: `Power at LTHR ${L} bpm`, value: Math.round(v), weight: r.r > 0.75 ? 0.25 : 0.12, detail: `${r.n} steady rides, r=${round(r.r, 2)}` });
-    }
+    const ex = rides.filter(a => (a.np || a.avgW) && a.avgHr >= 0.75 * L).sort((a, b) => b.date.localeCompare(a.date))
+      .map(a => hrProportional(a.np || a.avgW, a.avgHr, s)).filter(v => v && v > cur * 0.6 && v < cur * 1.4).slice(0, 3);
+    if (ex.length) methods.push({ key: 'hrprop', label: 'HR-proportional (last rides)', value: Math.round(median(ex)), weight: ex.length >= 2 ? 0.55 : 0.3, detail: `median of ${ex.length} ride${ex.length > 1 ? 's' : ''}` });
   }
+  // 2) intervals.icu rolling eFTP — most recent value from an indoor ride
+  const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
+  if (withE.length) methods.push({ key: 'eftp', label: 'intervals.icu eFTP', value: withE[0].eftp, weight: 0.3, detail: `latest, ${withE[0].date}` });
+  // 3) per-activity power-model FTP (hard rides only produce a meaningful model)
+  const pm = rides.filter(a => a.pmFtp && a.pmFtp > 50 && a.pmFtp < cur * 1.4).sort((a, b) => b.date.localeCompare(a.date)).map(a => a.pmFtp).slice(0, 3);
+  if (pm.length) methods.push({ key: 'pm', label: 'Power model (recent rides)', value: Math.round(median(pm)), weight: 0.15, detail: `${pm.length} ride${pm.length > 1 ? 's' : ''}` });
   return combine(methods, cur, 'W');
 }
 
@@ -79,13 +78,20 @@ export function estimateRun(acts, cur, endIso, days = 42) {
   return combine(methods, cur, 's/km', true);
 }
 
+export function isOpenWater(a) {
+  return /open ?water|openwater/i.test(a.type || '') || /open ?water|freiwasser|see\b|lake|meer|ocean|sea\b|river|fluss/i.test(a.name || '') || (Array.isArray(a.streamTypes) && a.streamTypes.includes('latlng'));
+}
 export function estimateSwim(acts, cur, endIso, days = 56) {
-  const swims = windowActs(acts, endIso, days).filter(a => a.sport === 'swim' && a.pace100 && a.distanceM >= 1000);
+  // POOL swims only (open water: GPS drift, sighting, breaststroke). Rolling: the 5 most recent pool swims.
+  const swims = windowActs(acts, endIso, days).filter(a => a.sport === 'swim' && !isOpenWater(a) && a.pace100 && a.pace100 > 70 && a.pace100 < 240 && a.distanceM >= 800)
+    .sort((a, b) => b.date.localeCompare(a.date));
   const methods = [];
-  const hard = swims.filter(a => isHard(a)).map(a => a.pace100 - 5); // session avg incl. warm-up ≈ CSS + 5 s
-  if (hard.length) methods.push({ key: 'sets', label: 'Hard/CSS sessions', value: Math.round(Math.min(...hard)), weight: 0.3, detail: `${hard.length} session${hard.length > 1 ? 's' : ''}` });
-  const fast = swims.map(a => a.pace100 - 8).sort((a, b) => a - b).slice(0, 2); // aerobic sessions ≈ CSS + 8 s
-  if (fast.length && !hard.length) methods.push({ key: 'aero', label: 'Fastest steady swims', value: Math.round(median(fast)), weight: 0.15, detail: `${fast.length} swims` });
+  const last = swims.slice(0, 5);
+  if (last.length) {
+    const hard = last.filter(isHard);
+    const v = median(last.map(a => a.pace100 - (isHard(a) ? 5 : 8)));   // session average ≈ CSS + 5 s (hard) / + 8 s (aerobic)
+    methods.push({ key: 'pool', label: 'Last pool swims', value: Math.round(v), weight: 0.3, detail: `${last.length} pool swim${last.length > 1 ? 's' : ''}${hard.length ? `, ${hard.length} hard` : ''} · latest ${last[0].date}` });
+  }
   // Detect a CSS test (e.g. activity named "CSS test" / "400 200 test") — the only reliable source.
   const test = swims.filter(a => /css.?test|400.*200|200.*400|swim.?test/i.test(a.name)).sort((a, b) => b.date.localeCompare(a.date))[0];
   if (test && test.description) {
@@ -110,7 +116,7 @@ function combine(methods, cur, unit, lowerIsBetter = false) {
 
 export function estimateAll(acts, s, endIso) {
   return {
-    ftp: estimateBike(acts, s.ftp, endIso),
+    ftp: estimateBike(acts, s.ftp, endIso, 42, s),
     runThreshold: estimateRun(acts, s.runThreshold, endIso),
     css: estimateSwim(acts, s.css, endIso),
   };
@@ -118,11 +124,13 @@ export function estimateAll(acts, s, endIso) {
 
 // Weekly history of the estimate, for trend lines on the Progress tab.
 export function estimateTrend(acts, s, endIso, weeks = 12) {
+  // recalculated at every relevant activity (not weekly)
+  const from = isoDate(addDays(parseDate(endIso), -7 * weeks));
+  const rel = { ftp: a => a.sport === 'bike' && a.indoor, runThreshold: a => a.sport === 'run', css: a => a.sport === 'swim' && !isOpenWater(a) };
   const out = { ftp: [], runThreshold: [], css: [] };
-  for (let i = weeks - 1; i >= 0; i--) {
-    const d = isoDate(addDays(parseDate(endIso), -7 * i));
-    const e = estimateAll(acts, s, d);
-    for (const k of Object.keys(out)) out[k].push({ date: d, value: e[k].value });
+  for (const k of Object.keys(out)) {
+    const dates = [...new Set(acts.filter(a => a.date >= from && a.date <= endIso && rel[k](a)).map(a => a.date))].sort();
+    for (const d of dates) { const e = k === 'ftp' ? estimateBike(acts, s.ftp, d, 42, s) : k === 'runThreshold' ? estimateRun(acts, s.runThreshold, d) : estimateSwim(acts, s.css, d); out[k].push({ date: d, value: e.value }); }
   }
   return out;
 }

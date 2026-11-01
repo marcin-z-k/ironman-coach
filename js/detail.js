@@ -102,30 +102,30 @@ async function loadStreams(a, node, heat) {
   if (ds.speed) {
     if (sp === 'run') {
       const y = ds.speed.map(v => v >= 1.4 && v <= 7 ? 1000 / v : null);
-      charts.push(['Pace', streamChart({ x: t, y, color: '#58e39a', name: 'Pace', invert: true, fmt: v => paceToStr(v) + '/km', axisFmt: v => paceToStr(v), avg: a.paceSecKm, group, xExtra: distAt })]);
+      charts.push(['Pace', streamChart({ x: t, y, color: '#58e39a', name: 'Pace', invert: true, fmt: v => paceToStr(v) + '/km', axisFmt: v => paceToStr(v), avg: a.paceSecKm, group, xExtra: distAt }), a.paceSecKm ? paceToStr(a.paceSecKm) + '/km' : '', '#58e39a']);
     } else if (sp === 'swim') {
       const y = ds.speed.map(v => v >= 0.3 && v <= 3 ? 100 / v : null);
-      charts.push(['Pace', streamChart({ x: t, y, color: '#4cc3ff', name: 'Pace', invert: true, fmt: v => paceToStr(v) + '/100m', axisFmt: v => paceToStr(v), avg: a.pace100, group, xExtra: distAt })]);
+      charts.push(['Pace', streamChart({ x: t, y, color: '#4cc3ff', name: 'Pace', invert: true, fmt: v => paceToStr(v) + '/100m', axisFmt: v => paceToStr(v), avg: a.pace100, group, xExtra: distAt }), a.pace100 ? paceToStr(a.pace100) + '/100m' : '', '#4cc3ff']);
     } else {
       const y = ds.speed.map(v => v >= 0 && v <= 25 ? v * 3.6 : null);
-      charts.push(['Speed', streamChart({ x: t, y, color: '#ffb020', name: 'Speed', fmt: v => round(v, 1) + ' km/h', avg: a.speedKmh, group, xExtra: distAt })]);
+      charts.push(['Speed', streamChart({ x: t, y, color: '#ffb020', name: 'Speed', fmt: v => round(v, 1) + ' km/h', avg: a.speedKmh, group, xExtra: distAt }), a.speedKmh ? round(a.speedKmh, 1) + ' km/h' : '', '#ffb020']);
     }
   }
-  if (ds.watts && realPower(a)) charts.push(['Power', streamChart({ x: t, y: ds.watts, color: '#ffd166', name: 'Power', fmt: v => Math.round(v) + ' W', avg: a.avgW, group, xExtra: distAt })]);
+  if (ds.watts && realPower(a)) charts.push(['Power', streamChart({ x: t, y: ds.watts, color: '#ffd166', name: 'Power', fmt: v => Math.round(v) + ' W', avg: a.avgW, group, xExtra: distAt }), a.avgW ? Math.round(a.avgW) + ' W' : '', '#ffd166']);
   if (ds.hr) {
     const z = getZoneModel()[sp === 'run' ? 'run' : 'bike']?.hr;
     const bands = z ? z.slice(0, 5).map((top, i) => ({ y0: i ? z[i - 1] : 40, y1: top, color: BAND[i] })) : [];
-    charts.push(['Heart rate', streamChart({ x: t, y: ds.hr.map(v => v > 40 ? v : null), color: '#ff5c6c', name: 'HR', fmt: v => Math.round(v) + ' bpm', avg: a.avgHr, bands, group, xExtra: distAt })]);
+    charts.push(['Heart rate', streamChart({ x: t, y: ds.hr.map(v => v > 40 ? v : null), color: '#ff5c6c', name: 'HR', fmt: v => Math.round(v) + ' bpm', avg: a.avgHr, bands, group, xExtra: distAt }), a.avgHr ? Math.round(a.avgHr) + ' bpm' : '', '#ff5c6c']);
   }
   if (ds.cad && ds.cad.some(v => v > 0)) {
     const dbl = sp === 'run' && (a.avgCadence ?? 90) < 120;
     const y = ds.cad.map(v => v > 0 ? (dbl ? v * 2 : v) : null);
     const vals = y.filter(v => v); const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
-    charts.push(['Cadence', streamChart({ x: t, y, color: '#c48cff', name: 'Cadence', fmt: v => Math.round(v) + (sp === 'run' ? ' spm' : ' rpm'), avg, group, xExtra: distAt })]);
+    charts.push(['Cadence', streamChart({ x: t, y, color: '#c48cff', name: 'Cadence', fmt: v => Math.round(v) + (sp === 'run' ? ' spm' : ' rpm'), avg, group, xExtra: distAt }), Math.round(avg) + (sp === 'run' ? ' spm' : ' rpm'), '#c48cff']);
   }
-  if (ds.alt && ds.alt.some(v => v != null)) charts.push(['Elevation', streamChart({ x: t, y: ds.alt, color: '#9aa3b2', name: 'Elevation', fmt: v => Math.round(v) + ' m', group, xExtra: distAt })]);
+  if (ds.alt && ds.alt.some(v => v != null)) charts.push(['Elevation', streamChart({ x: t, y: ds.alt, color: '#9aa3b2', name: 'Elevation', fmt: v => Math.round(v) + ' m', group, xExtra: distAt }), a.elev ? '+' + Math.round(a.elev) + ' m' : '', '#cfd5df']);
   wrap.innerHTML = '';
-  charts.forEach(([title, c]) => { const card = el(`<div class="an-card chart-card"><div class="card-title">${title}</div></div>`); card.append(c); wrap.append(card); });
+  charts.forEach(([title, c, avgTxt, col]) => { const card = el(`<div class="an-card chart-card"><div class="chart-head"><div class="card-title" style="margin:0">${title}</div>${avgTxt ? `<span class="avg-pill" style="--c:${col}"><span>${title === 'Elevation' ? 'gain' : 'avg'}</span>${esc(avgTxt)}</span>` : ''}</div></div>`); card.append(c); wrap.append(card); });
   // decoupling (bike/run > 60 min)
   if ((sp === 'bike' || sp === 'run') && a.movingSec > 3600) {
     const d = decoupling(st, a, realPower(a));
@@ -157,7 +157,7 @@ async function drawMap(wrap, latlng, sport) {
     const pts = latlng.filter(p => p && p[0] != null && Math.abs(p[0]) > 0.01);
     const step = Math.max(1, Math.floor(pts.length / 1500));
     const line = pts.filter((_, i) => i % step === 0);
-    const map = L.map(wrap.querySelector('.map'), { zoomControl: false, attributionControl: true, scrollWheelZoom: false });
+    const map = L.map(wrap.querySelector('.map'), { zoomControl: false, attributionControl: true, scrollWheelZoom: false, dragging: false, touchZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, tap: false, zoomSnap: 0.25 });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors © CARTO' }).addTo(map);
     const col = sport === 'run' ? '#58e39a' : sport === 'bike' ? '#ffb020' : '#4cc3ff';
     L.polyline(line, { color: col, weight: 10, opacity: 0.25 }).addTo(map);

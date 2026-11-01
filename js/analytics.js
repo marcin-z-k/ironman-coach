@@ -121,24 +121,57 @@ export function disciplineSplit(acts, days = 28) {
 }
 
 // ---- dual FTP coupling ----------------------------------------------------------------
-// Outdoor FTP from speed + elevation + HR on rides without a power meter (physics estimate):
-//   P ≈ (½ρ·CdA·v³·1.1 + Crr·m·g·v + m·g·climb/t) / 0.97,  FTP ≈ P / powerFraction(HR/LTHR)
-export function outdoorFtpEstimate(acts, s) {
-  const L = getZoneModel().bike.lthr;
+// Outdoor FTP without a power meter (physics):
+//   P_air   = ½·ρ·CdA·v³              (ρ 1.225 kg/m³, CdA 0.35 — road bike, hoods)
+//   P_roll  = Crr·m·g·v·cos α         (Crr 0.005, m = rider + 9 kg bike)
+//   P_slope = m·g·v·sin α             (α from GPS elevation; descents add nothing — you coast)
+// v and HR are MEDIANS of moving samples (filters stops and GPS spikes). Then threshold power is
+// extrapolated proportionally in heart-rate reserve:  FTP = P · (LTHR − HRrest) / (HRmedian − HRrest).
+const RHO = 1.225, CDA = 0.35, CRR = 0.005, G = 9.81, ETA = 0.97;
+export function hrProportional(P, hr, s, sport = 'bike') {
+  const L = getZoneModel()[sport]?.lthr, R = s.restHr || 55;
+  if (!L || !hr || hr <= R + 15) return null;
+  return P * (L - R) / (hr - R);
+}
+function physicsPower(v, sinA, m) {
+  const cos = Math.sqrt(1 - sinA * sinA);
+  return Math.max(0, 0.5 * RHO * CDA * v ** 3 + CRR * m * G * v * cos + m * G * v * sinA) / ETA;
+}
+export function outdoorRidePower(a, s) {
   const m = (s.weightKg || 75) + 9;
+  const st = cachedStreams(a.id);
+  if (st?.speed && st.hr && st.n > 600) {
+    const vs = [], hs = [];
+    for (let i = 0; i < st.n; i++) { const v = st.speed[i], h = st.hr[i]; if (v > 3 && v < 20 && h > 60) { vs.push(v); hs.push(h); } }
+    if (vs.length > 600) {
+      const v = median(vs), hr = median(hs);
+      // average positive grade from the altitude stream (smoothed over ~200 m)
+      let climb = 0, dist = 0;
+      if (st.alt && st.dist) { let lastA = st.alt[0], lastD = st.dist[0]; for (let i = 1; i < st.n; i++) { if (st.dist[i] - lastD >= 200) { const dh = st.alt[i] - lastA; if (dh > 0) climb += dh; dist += st.dist[i] - lastD; lastA = st.alt[i]; lastD = st.dist[i]; } } }
+      const sinA = dist > 0 ? Math.min(0.08, climb / dist / 2) : 0;   // half the route climbs, the other half descends
+      return { P: physicsPower(v, sinA, m), hr, v, src: 'streams' };
+    }
+  }
+  if (!a.distanceM || !a.movingSec || !a.avgHr) return null;
+  const v = a.distanceM / a.movingSec;
+  const sinA = Math.min(0.08, (a.elev || 0) / a.distanceM / 2);
+  return { P: physicsPower(v, sinA, m), hr: a.avgHr, v, src: 'averages' };
+}
+export function outdoorFtpEstimate(acts, s) {
   const from = isoDate(addDays(new Date(), -70));
   const est = [];
   for (const a of acts) {
-    if (a.sport !== 'bike' || a.indoor || a.date < from || a.movingSec < 3600 || !a.distanceM || !a.avgHr || !L) continue;
-    const v = a.distanceM / a.movingSec;
-    if (v < 5 || v > 14) continue;
-    const P = (0.5 * 1.2 * 0.32 * v ** 3 * 1.1 + 0.005 * m * 9.81 * v + m * 9.81 * (a.elev || 0) / a.movingSec) / 0.97;
-    const pf = clamp((a.avgHr / L - 0.5) / 0.5, 0.45, 1.05);
-    est.push({ ftp: P / pf, P, date: a.date });
+    if (a.sport !== 'bike' || a.indoor || a.date < from || a.movingSec < 3600 || !a.avgHr) continue;
+    const r = outdoorRidePower(a, s);
+    if (!r || r.v < 5 || r.v > 14) continue;
+    const ftp = hrProportional(r.P, r.hr, s);
+    if (!ftp || ftp < 80 || ftp > 400) continue;
+    est.push({ ftp, P: r.P, date: a.date, src: r.src });
   }
   if (est.length < 2) return null;
-  const top = est.map(e => e.ftp).sort((a, b) => b - a).slice(0, Math.max(2, Math.ceil(est.length / 2)));
-  return { ftp: Math.round(median(top)), avgP: Math.round(median(est.map(e => e.P))), n: est.length };
+  est.sort((x, y) => y.date.localeCompare(x.date));
+  const recent = est.slice(0, 5);   // rolling: last 5 qualifying rides
+  return { ftp: Math.round(median(recent.map(e => e.ftp))), avgP: Math.round(median(recent.map(e => e.P))), n: recent.length, fromStreams: recent.filter(e => e.src === 'streams').length };
 }
 
 export function ftpCoupling(acts, s) {
@@ -146,7 +179,7 @@ export function ftpCoupling(acts, s) {
   let c = s.ftpCoupling;
   const est = outdoorFtpEstimate(acts, s);
   if (s.outdoorPower && s.ftpOutdoor) c = { ratio: s.ftpOutdoor / s.ftp, outdoor: s.ftpOutdoor, indoor: s.ftp, source: 'power meter' };
-  else if (!c && est) c = { ratio: est.ftp / s.ftp, outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: 'speed + HR estimate' };
+  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.8, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: 'speed + HR physics estimate' };
   if (!c) return { target, est, ratio: null };
   const outdoorNow = Math.round(s.ftp * c.ratio);
   const indoorTarget = Math.round(target / c.ratio);

@@ -5,7 +5,8 @@ import { summarise, getSummary, ruleSummary } from './analysis.js';
 import { renderWidgets } from './health.js';
 import { hrRangeStr, hrZoneOf, plannedDist, getZoneModel } from './zones.js';
 import { estimateAll, estimateTrend } from './thresholds.js';
-import { describeTarget, fmtMin, ROLES } from './workouts.js';
+import { describeTarget, fmtMin, ROLES, myWhoosh } from './workouts.js';
+import { TRI, goalLabel } from './goals.js';
 import { predict } from './predict.js';
 import { lineChart, barChart } from './charts.js';
 import { openActivity, scoreBadge } from './detail.js';
@@ -163,6 +164,7 @@ export function sessionCard(x, A, ui, opts = {}) {
       <div class="metric"><div class="v">${Math.round(x.if * 100)}%</div><div class="k">Intensity</div></div>
     </div>
     ${refBlock(x)}
+    ${mwBlock(x)}
     ${stepsHtml(x, s)}
     ${x.note ? `<p class="small muted" style="margin-top:12px">${esc(x.note)}</p>` : ''}
     ${fuelLine(x)}
@@ -191,6 +193,12 @@ export function sessionCard(x, A, ui, opts = {}) {
     }
   });
   return card;
+}
+
+function mwBlock(x) {
+  const m = myWhoosh(x);
+  if (!m) return '';
+  return `<div class="mw"><div class="mw-h"><span class="mw-badge">MyWhoosh</span>${m.name ? `<b>${esc(m.name)}</b><span class="faint small"> · ${m.fit === 'match' ? 'matches' : 'closest library workout'}</span>` : '<b>Free Ride · ERG</b>'}</div>${m.what ? `<div class="small muted">${esc(m.what)}</div>` : ''}${m.manual ? `<div class="small" style="margin-top:4px">${esc(m.manual)}</div>` : ''}</div>`;
 }
 
 function fuelLine(x) {
@@ -241,7 +249,9 @@ export function renderPlan(A, ui) {
   const plan = A.plan;
   const counts = {}; plan.weeks.forEach(w => counts[w.phase] = (counts[w.phase] || 0) + 1);
   const order = ['base', 'build', 'peak', 'taper', 'race'];
-  root.append(h(`<div class="card"><div class="card-title">Road to ${esc(load().raceName)}</div>
+  const ps = load();
+  const srcPill = ps.planSource === 'custom' ? `Imported · ${esc(ps.customName || 'plan')}` : ps.planSource === 'goal' ? esc(goalLabel(ps.goal)) : 'Default plan';
+  root.append(h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Road to ${esc(load().raceName)}</div><span class="pill ${ps.planSource && ps.planSource !== 'default' ? 'accent' : ''}">${srcPill}${ps.indoorMode ? ' · indoor' : ''}</span></div><div style="height:10px"></div>
     <div class="row between"><div class="big">${plan.totalWeeks + 1} <span class="small muted" style="font-weight:600">weeks</span></div><div class="small muted" style="text-align:right">${fmtDate(plan.anchor)} → ${fmtDate(plan.raceDate, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>
     <div class="phase-bar">${order.filter(p => counts[p]).map(p => `<span class="phase-${p}" style="flex:${counts[p]}"></span>`).join('')}</div>
     <div class="phase-legend">${order.filter(p => counts[p]).map(p => `<span><span class="dot phase-${p}" style="margin-right:4px"></span>${PHASES[p].label} ${counts[p]}w</span>`).join('')}</div>
@@ -347,7 +357,7 @@ function simulatorCard(A, ui) {
   const d = ui.sim ||= { ftp: 0, css: 0, thr: 0, swimCont: b.swimCont, runCont: round(b.runCont, 1), wetsuit: true };
   const goal = (s.goalHours || 12) * 3600;
   const card = h(`<div class="card hero sim">
-    <div class="row between"><div class="card-title" style="margin:0">Projected finish</div><button class="btn ghost small" data-reset>Reset</button></div>
+    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn ghost small" data-reset>Reset</button></div>
     <div class="row between" style="margin-top:6px"><div class="big mono" data-o="total"></div><span class="pill" data-o="gap"></span></div>
     <div class="splitbar" data-o="bar"><span class="sw"></span><span class="bk"></span><span class="rn"></span><span class="tr"></span><i class="goal"></i></div>
     <div class="split" style="margin-top:12px">
@@ -360,8 +370,8 @@ function simulatorCard(A, ui) {
       ${slider('ftp', 'Bike FTP', -30, 80, 1)}
       ${slider('css', 'Swim CSS / pace', -20, 15, 1)}
       ${slider('thr', 'Run threshold', -90, 30, 1)}
-      ${slider('swimCont', 'Continuous swim', 100, 4000, 100)}
-      ${slider('runCont', 'Continuous run', 3, 42.2, 0.2)}
+      ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim), 100)}
+      ${slider('runCont', 'Continuous run', 3, Math.max(42.2, D0g(s).run), 0.2)}
       <label class="toggle"><input type="checkbox" data-k="wetsuit" ${d.wetsuit ? 'checked' : ''}> Wetsuit swim</label>
     </div>
     <details class="more" style="margin-top:10px"><summary>How this is calculated</summary><div class="small muted" style="line-height:1.55">
@@ -371,6 +381,11 @@ function simulatorCard(A, ui) {
       <b>Transitions</b> 12 min.</div></details>
   </div>`);
   const out = k => card.querySelector(`[data-o="${k}"]`);
+  const D0 = predict(b, s, d).D;
+  if (!D0.swim) { card.querySelector('[data-o="swim"]').closest('.metric').remove(); card.querySelector('[data-k="css"]').closest('.sl').remove(); card.querySelector('[data-k="swimCont"]').closest('.sl').remove(); card.querySelector('[data-k="wetsuit"]').closest('label').remove(); }
+  if (!D0.bike) { card.querySelector('[data-o="bike"]').closest('.metric').remove(); card.querySelector('[data-k="ftp"]').closest('.sl').remove(); }
+  if (!D0.run) { card.querySelector('[data-o="run"]').closest('.metric').remove(); card.querySelector('[data-k="thr"]').closest('.sl').remove(); card.querySelector('[data-k="runCont"]').closest('.sl').remove(); }
+  if (!D0.trans) card.querySelector('[data-o="trans"]').closest('.metric').remove();
   const update = () => {
     const p = predict(b, s, d);
     out('total').textContent = fmtSec(p.totalSec);
@@ -378,13 +393,14 @@ function simulatorCard(A, ui) {
     out('total').className = 'big mono ' + (diff <= 0 ? 'sport-run' : 'sport-bike');
     out('gap').textContent = diff <= 0 ? `${fmtSec(-diff)} under goal` : `${fmtSec(diff)} over goal`;
     out('gap').className = 'pill ' + (diff <= 0 ? 'good' : 'warn');
-    out('swim').textContent = fmtSec(p.swimSec);
-    out('swimk').textContent = `Swim · ${paceToStr(p.swim.effPace)}/100m avg${p.swim.cont < 3800 ? ` · ${Math.floor(3800 / p.swim.cont - 1)} stops` : ''}`;
-    out('bike').textContent = fmtSec(p.bikeSec);
-    out('bikek').textContent = `Bike · ${p.bike.kmh} km/h`;
-    out('run').textContent = fmtSec(p.runSec);
-    out('runk').textContent = p.run.walkKm > 0 ? `Run ${round(p.run.runCont, 0)} km @ ${paceToStr(p.run.runPace)} + run/walk ${p.run.walkKm} km` : `Run · ${paceToStr(p.run.runPace)}/km`;
-    out('trans').textContent = fmtSec(p.transSec);
+    const set = (k, v) => { const e = out(k); if (e) e.textContent = v; };
+    set('swim', fmtSec(p.swimSec));
+    if (out('swimk')) out('swimk').textContent = `Swim · ${paceToStr(p.swim.effPace)}/100m avg${p.swim.cont < 3800 ? ` · ${Math.floor(3800 / p.swim.cont - 1)} stops` : ''}`;
+    set('bike', fmtSec(p.bikeSec));
+    set('bikek', `Bike · ${p.bike.kmh} km/h${p.D.hm ? ` · ${p.D.hm} hm` : ''}`);
+    set('run', fmtSec(p.runSec));
+    if (out('runk')) out('runk').textContent = p.run.walkKm > 0 ? `Run ${round(p.run.runCont, 0)} km @ ${paceToStr(p.run.runPace)} + run/walk ${p.run.walkKm} km` : `Run · ${paceToStr(p.run.runPace)}/km`;
+    set('trans', fmtSec(p.transSec));
     const bar = out('bar'), tot = Math.max(p.totalSec, goal);
     bar.querySelector('.sw').style.width = (p.swimSec / tot * 100) + '%';
     bar.querySelector('.bk').style.width = (p.bikeSec / tot * 100) + '%';
@@ -395,16 +411,17 @@ function simulatorCard(A, ui) {
       ftp: `${s.ftp + d.ftp} W ${sign(d.ftp, ' W')}`,
       css: `CSS ${paceToStr(s.css + d.css)} · pace ${paceToStr(b.swimPace + d.css)}`,
       thr: `${paceToStr(s.runThreshold + d.thr)}/km · easy ${paceToStr(b.runEasy + d.thr)}`,
-      swimCont: d.swimCont >= 3800 ? 'full 3.8 km' : `${d.swimCont} m`, runCont: d.runCont >= 42.2 ? 'full marathon' : `${round(d.runCont, 1)} km`,
+      swimCont: d.swimCont >= (D0.swim || 3800) ? `full ${((D0.swim || 3800) / 1000).toFixed(1)} km` : `${d.swimCont} m`, runCont: d.runCont >= (D0.run || 42.2) ? `full ${D0.run || 42.2} km` : `${round(d.runCont, 1)} km`,
     };
     for (const k in lab) { const e = card.querySelector(`[data-v="${k}"]`); if (e) e.textContent = lab[k]; }
   };
   card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; });
-  card.querySelector('[data-k="wetsuit"]').onchange = (e) => { d.wetsuit = e.target.checked; update(); };
+  const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; update(); };
   card.querySelector('[data-reset]').onclick = () => { ui.sim = null; ui.keepScroll(); ui.rerender(); };
   update();
   return card;
 }
+const D0g = (s) => predict({ swimPace: 120, swimCont: 600, bikeKmh: 28, runEasy: 400, runCont: 10, notes: {} }, s, {}).D;
 function sign(v, u) { return v === 0 ? '' : `(${v > 0 ? '+' : '−'}${Math.abs(v)}${u})`; }
 function slider(k, label, min, max, step) {
   return `<div class="sl"><div class="row between small"><span class="muted">${label}</span><b data-v="${k}"></b></div><input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}"></div>`;
@@ -499,7 +516,7 @@ const A_TODAY = () => isoDate(new Date());
 // ---- load management: ramp rate, monotony/strain, grey zone ------------------------------
 function loadCard(acts, wellness) {
   const rr = rampRate(wellness), mono = monotony(acts), gz = greyZone(acts);
-  const card = h(`<div class="card"><div class="card-title">Load management</div><div class="lm-grid"></div><div class="lm-extra"></div></div>`);
+  const card = h(`<div class="card"><div class="card-title">Load management</div><p class="lm-explain"><b style="color:#38c6ff">Fitness (CTL)</b> = your 6-week training load — what your body is adapted to. <b style="color:#ff5c6c">Fatigue (ATL)</b> = your last-week load. <b style="color:#ffb020">Form (TSB)</b> = fitness − fatigue: negative while you build, positive when you are fresh for a race.</p><div class="lm-grid"></div><div class="lm-extra"></div></div>`);
   const grid = card.querySelector('.lm-grid');
   if (rr) grid.append(h(`<div class="metric lm"><div class="row between"><div class="k">Ramp rate</div><span class="pill ${rr.level[0]} tiny">${rr.level[1]}</span></div><div class="v">${rr.value > 0 ? '+' : ''}${rr.value} <span class="small muted">CTL/wk</span></div><div class="small faint">≤5 optimal · 6–8 demanding · >8 risk</div></div>`));
   grid.append(h(`<div class="metric lm"><div class="row between"><div class="k">Monotony (Foster)</div><span class="pill ${mono.high ? 'bad' : 'good'} tiny">${mono.high ? 'High' : 'OK'}</span></div><div class="v">${mono.monotony > 9 ? '—' : mono.monotony}</div><div class="small faint">strain ${mono.strain} · daily load ${mono.mean} ± ${mono.sd}</div></div>`));
@@ -583,7 +600,22 @@ export function renderSettings(ui, onSave) {
   const root = h(`<div class="stack" style="gap:12px">
     ${storageWorks() ? '' : '<div class="adjust-banner bad"><span>!</span><div><strong>This browser blocks storage</strong> (private mode or "block all cookies"). Settings and login are lost when you close the app. Use normal browsing mode.</div></div>'}
     <form class="card form" id="settingsForm" autocomplete="on">
-      <div class="card-title">intervals.icu</div>
+      <div class="card-title">Training plan</div>
+      <div class="seg" role="radiogroup">${[['default', 'Default plan', 'Ironman · fixed week'], ['goal', 'My goal', 'pick a race type'], ['custom', 'Imported', s.customName ? esc(s.customName) : 'JSON from your AI']].map(([v, l, sub]) => `<label class="seg-opt ${(s.planSource || 'default') === v ? 'on' : ''}"><input type="radio" name="planSource" value="${v}" ${(s.planSource || 'default') === v ? 'checked' : ''} ${v === 'custom' && !s.customName ? 'disabled' : ''}><b>${l}</b><span>${sub}</span></label>`).join('')}</div>
+      <div class="goalbox" ${(s.planSource || 'default') === 'goal' ? '' : 'hidden'}>
+        <div class="grid2">
+          <div class="field"><label>Discipline</label><select name="goalType">${[['triathlon', 'Triathlon'], ['run', 'Running'], ['bike', 'Cycling'], ['swim', 'Swimming']].map(([v, l]) => `<option value="${v}" ${(s.goal?.type || 'triathlon') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          <div class="field g-tri"><label>Distance</label><select name="goalTri">${Object.entries(TRI).map(([k, t]) => `<option value="${k}" ${(s.goal?.tri || 'full') === k ? 'selected' : ''}>${t.label} (${t.swim / 1000} / ${t.bike} / ${t.run} km)</option>`).join('')}</select></div>
+          <div class="field g-run"><label>Distance (km)</label><input name="goalRunKm" type="number" step="any" min="1" value="${s.goal?.runKm ?? 42.195}"></div>
+          <div class="field g-bike"><label>Distance (km)</label><input name="goalBikeKm" type="number" step="any" min="5" value="${s.goal?.bikeKm ?? 100}"></div>
+          <div class="field g-bike"><label>Elevation gain (hm)</label><input name="goalBikeHm" type="number" step="10" min="0" value="${s.goal?.bikeHm ?? 0}"></div>
+          <div class="field g-swim"><label>Distance (m)</label><input name="goalSwimM" type="number" step="50" min="100" value="${s.goal?.swimM ?? 3800}"></div>
+        </div>
+        <div class="hint">Your default plan stays untouched — switch back any time. All sports you log still count for fitness and load.</div>
+      </div>
+      <label class="switch-row"><span><b>Indoor Trainer Mode</b><span class="hint" style="display:block">Long rides on the trainer (MyWhoosh): capped at 3 h, more quality per minute.</span></span><input type="checkbox" class="ios" name="indoorMode" ${s.indoorMode ? 'checked' : ''}></label>
+
+      <div class="card-title" style="margin-top:8px">intervals.icu</div>
       <div class="grid2">
         <div class="field"><label for="athleteId">Athlete ID</label><input id="athleteId" name="username" value="${esc(s.athleteId)}" placeholder="i123456" autocomplete="username" autocapitalize="off" spellcheck="false"></div>
         <div class="field"><label for="apiKey">API key</label><input id="apiKey" name="password" type="password" value="${esc(s.apiKey)}" placeholder="from Settings → Developer" autocomplete="current-password"></div>
@@ -642,7 +674,25 @@ export function renderSettings(ui, onSave) {
       <button class="btn secondary" type="button" id="btnReset">Clear all local data</button>
     </form>
   </div>`);
+  root.querySelector('form').after(h(`<div class="card"><div class="card-title">Plans & sharing</div>
+    <div class="stack" style="gap:8px">
+      <button class="btn secondary" type="button" data-pa="prompt">⤓ Download AI Coach Prompt for Custom Plan</button>
+      <div class="hint">Give this file to any AI (ChatGPT, Claude, Gemini…). It interviews you, builds a day-by-day plan up to race day and ends with JSON you can import here.</div>
+      <button class="btn secondary" type="button" data-pa="import">⇪ Import plan (JSON from your AI)</button>
+      <button class="btn secondary" type="button" data-pa="export">⤓ Export current plan (JSON)</button>
+      <button class="btn ghost" type="button" data-pa="reset">↺ Reset to default plan</button>
+    </div></div>`));
+  root.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => ui.planAction(b.dataset.pa));
   const form = root.querySelector('form');
+  const syncGoal = () => {
+    const src = form.querySelector('[name=planSource]:checked')?.value;
+    form.querySelectorAll('.seg-opt').forEach(o => o.classList.toggle('on', o.querySelector('input').checked));
+    form.querySelector('.goalbox').hidden = src !== 'goal';
+    const t = form.querySelector('[name=goalType]').value;
+    form.querySelectorAll('.g-tri,.g-run,.g-bike,.g-swim').forEach(el => { el.hidden = !el.classList.contains('g-' + t); });
+  };
+  form.querySelectorAll('[name=planSource],[name=goalType]').forEach(i => i.onchange = syncGoal);
+  syncGoal();
   form.onsubmit = (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -656,6 +706,8 @@ export function renderSettings(ui, onSave) {
       weightKg: +fd.get('weightKg') || 75, runThreshold: strToPace(fd.get('runThreshold')) || s.runThreshold, css: strToPace(fd.get('css')) || s.css,
       swimContinuous: +fd.get('swimContinuous') || 600, runContinuous: +fd.get('runContinuous') || null,
       thresholdSource: fd.get('thresholdSource'), demo: fd.get('demo') === 'on', weekTemplate: tpl.length ? tpl : null,
+      planSource: fd.get('planSource') || 'default', indoorMode: fd.get('indoorMode') === 'on',
+      goal: fd.get('planSource') === 'custom' ? s.goal : { type: fd.get('goalType'), tri: fd.get('goalTri'), runKm: +fd.get('goalRunKm') || 42.195, bikeKm: +fd.get('goalBikeKm') || 100, bikeHm: +fd.get('goalBikeHm') || 0, swimM: +fd.get('goalSwimM') || 3800 },
       planStart: fd.get('planStart') || s.planStart || today,
     };
     if (patch.athleteId && /^\d+$/.test(patch.athleteId)) patch.athleteId = 'i' + patch.athleteId;

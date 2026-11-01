@@ -8,7 +8,8 @@ import { generatePlan, weekForDate } from './plan.js';
 import { reconcile, catchUp } from './schedule.js';
 import { zoneIntensity } from './analysis.js';
 import { baseline, predict } from './predict.js';
-import { load } from './store.js';
+import { load, getCache } from './store.js';
+import { importPlan } from './customplan.js';
 
 export function latestWellness(wellness) {
   const withLoad = wellness.filter(w => w.ctl != null);
@@ -56,8 +57,13 @@ export function analyse(settings, data) {
   const moves = settings.moves || {};
   const w = latestWellness(well);
 
+  // Imported (friend / AI) plan: used as-is — day swaps and catch-up still apply, no automatic rescaling.
+  const custom = settings.planSource === 'custom' ? getCache('customPlan') : null;
+  const customPlan = custom ? importPlan(custom, settings).plan : null;
+  const gen = (adj, opts) => customPlan ? importPlan(custom, settings).plan : generatePlan(settings, adj, opts);
+
   // 1) reference plan + reconciliation
-  const base = generatePlan(settings, undefined, { acts });
+  const base = gen(undefined, { acts });
   const r0 = reconcile(base, acts, moves, tIso);
 
   // 2) compliance (planned load vs done, past days only)
@@ -99,7 +105,8 @@ export function analyse(settings, data) {
 
   // final plan
   const currentWeek = weekForDate(base, tIso);
-  const plan = generatePlan(settings, { factor, fromWeek: currentWeek ? currentWeek.index : 0, intensityCap }, { acts, focus: focus.mult });
+  if (customPlan) { factor = 1; intensityCap = null; reason = ''; focus.mult = { swim: 1, bike: 1, run: 1 }; }
+  const plan = gen({ factor, fromWeek: currentWeek ? currentWeek.index : 0, intensityCap }, { acts, focus: focus.mult });
   const { matches, extras } = reconcile(plan, acts, moves, tIso);
   // 4) catch-up for missed sessions
   const caught = catchUp(plan, matches, tIso, settings);

@@ -4,6 +4,7 @@
 import { isoDate, addDays, startOfWeek, parseDate, paceToStr, clamp, round } from './util.js';
 import { refInfo, dowOf } from './history.js';
 import { ROLES, finalize, scaleVolume, raceWeek, T } from './workouts.js';
+import { goalArchetype, TRI } from './goals.js';
 import { getZoneModel, powerRangeStr, paceRangeStr } from './zones.js';
 
 export const PHASES = {
@@ -51,7 +52,8 @@ export const DEFAULT_TEMPLATE = [
 export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap: null }, opts = {}) {
   const acts = opts.acts || [];
   const focus = opts.focus || { swim: 1, bike: 1, run: 1 };
-  const template = (s.weekTemplate && s.weekTemplate.length ? s.weekTemplate : DEFAULT_TEMPLATE).filter(t => ROLES[t.role]);
+  const arch = goalArchetype(s);   // null → the athlete's own default Ironman plan (unchanged)
+  const template = (arch ? arch.template : (s.weekTemplate && s.weekTemplate.length ? s.weekTemplate : DEFAULT_TEMPLATE)).filter(t => ROLES[t.role]);
   const anchor = startOfWeek(parseDate(s.planStart || isoDate(new Date())));
   const race = parseDate(s.raceDate);
   const raceWeekStart = startOfWeek(race);
@@ -73,17 +75,19 @@ export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap:
     const intensityCap = applies ? adjust.intensityCap : null;
     let sessions = [];
     if (phase === 'race') {
-      sessions = raceWeek(dates, s, s.raceDate).map(([dow, sess]) => ({ ...finalize(sess, s), dow, date: dates[dow], origDate: dates[dow], id: `${weekStart}-${dow}-${sess.sport}-${sess.kind}` }));
+      const g = s.planSource === 'goal' ? s.goal : null;
+      const sports = g && g.type !== 'triathlon' ? new Set([g.type]) : new Set(template.map(t => ROLES[t.role].sport));
+      sessions = raceWeek(dates, s, s.raceDate).filter(([, x]) => sports.has(x.sport) && (!x.brickOnly || !g || g.type === 'triathlon')).map(([dow, sess]) => ({ ...finalize(sess, s), dow, date: dates[dow], origDate: dates[dow], id: `${weekStart}-${dow}-${sess.sport}-${sess.kind}` }));
       const ri = dates.indexOf(s.raceDate);
       if (ri >= 0) sessions.push({ sport: 'brick', kind: 'race', title: s.raceName || 'Race day', min: Math.round((s.goalHours || 12) * 60), tss: 0, if: 0.7, key: true, dow: ri, date: s.raceDate, origDate: s.raceDate, id: `${weekStart}-race`,
-        steps: [{ kind: 'steady', min: 90, zone: 2, text: 'Swim 3.8 km — calm, steady rhythm, sight every 6–8 strokes' }, { kind: 'steady', min: 390, zone: 2, target: s.outdoorPower ? T.power(0.68, 0.75) : T.hr(2), text: 'Bike 180 km — hold back the first hour, eat every 20 min' }, { kind: 'steady', min: 300, zone: 2, target: T.hr(2), text: 'Run 42.2 km — run/walk from the start (9:1), walk every aid station' }] });
+        steps: raceSteps(s, arch) });
     } else {
       const taperMult = phase === 'taper' ? (wtg === 2 ? 0.85 : 0.7) : 1;
       const recMult = recovery ? 0.72 : 1;
       for (const t of template) {
         const R = ROLES[t.role];
-        const vol = taperMult * recMult * (applies ? adjust.factor * (focus[R.sport] || 1) : 1);
-        const ctx = { s, phase, p, easyOnly: recovery || intensityCap === 'easy', vol, keyAlt, wtg, longBase };
+        const vol = taperMult * recMult * (t.vol ?? 1) * (applies ? adjust.factor * (focus[R.sport] || 1) : 1);
+        const ctx = { s, phase, p, easyOnly: recovery || intensityCap === 'easy', vol, keyAlt, wtg, longBase, pk: arch?.pk };
         const sess = finalize(R.build(ctx), s);
         if (phase === 'taper') sess.title = sess.title + ' (taper)';
         sess.role = t.role; sess.dow = t.dow; sess.date = dates[t.dow]; sess.origDate = dates[t.dow];
@@ -100,6 +104,19 @@ export function generatePlan(s, adjust = { factor: 1, fromWeek: 0, intensityCap:
   }
   return { weeks, totalWeeks, anchor: isoDate(anchor), raceDate: s.raceDate, zones: zones(s), template, longBase,
     baseHours: weeks[0] ? weeks[0].hours : 0 };
+}
+
+function raceSteps(s, arch) {
+  const g = s.planSource === 'goal' ? s.goal : null;
+  if (g && g.type !== 'triathlon') {
+    const what = g.type === 'run' ? `Run ${g.runKm} km` : g.type === 'bike' ? `Ride ${g.bikeKm} km${g.bikeHm ? ' / ' + g.bikeHm + ' hm' : ''}` : `Swim ${g.swimM} m`;
+    return [{ kind: 'steady', min: Math.round((s.goalHours || 3) * 60), zone: 3, target: g.type === 'swim' ? null : T.hr(3), text: `${what} — start controlled, even effort, fuel early` }];
+  }
+  if (g && g.tri && g.tri !== 'full') {
+    const t = TRI[g.tri], H = (s.goalHours || 5) * 60;
+    return [{ kind: 'steady', min: Math.round(H * 0.17), zone: 3, text: `Swim ${t.swim} m — strong but controlled` }, { kind: 'steady', min: Math.round(H * 0.5), zone: 3, target: T.hr(3), text: `Bike ${t.bike} km — even effort, eat and drink` }, { kind: 'steady', min: Math.round(H * 0.33), zone: 3, target: T.hr(3), text: `Run ${t.run} km — settle in, push the second half` }];
+  }
+  return [{ kind: 'steady', min: 90, zone: 2, text: 'Swim 3.8 km — calm, steady rhythm, sight every 6–8 strokes' }, { kind: 'steady', min: 390, zone: 2, target: s.outdoorPower ? T.power(0.68, 0.75) : T.hr(2), text: 'Bike 180 km — hold back the first hour, eat every 20 min' }, { kind: 'steady', min: 300, zone: 2, target: T.hr(2), text: 'Run 42.2 km — run/walk from the start (9:1), walk every aid station' }];
 }
 
 // Typical long-ride length before the plan started (median of the weekly longest outdoor ride, last 8 weeks).

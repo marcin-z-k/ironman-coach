@@ -76,8 +76,8 @@ export function scaleVolume(sess, factor, s) {
 // ctx: { s, phase, p (0..1 progression), easyOnly, vol (volume multiplier), keyAlt, wtg }
 
 export function swimTechnique(c) {
-  const { phase, p, easyOnly, vol } = c;
-  const D = r100(lerp(2000, 3000, p) * vol);
+  const { phase, p, easyOnly, vol } = c; const pk = c.pk || {};
+  const D = r100(lerp(pk.swimStart ?? 2000, pk.swimTechMax ?? 3000, p) * vol);
   const mainRep = phase === 'base' || easyOnly ? 200 : phase === 'build' ? 300 : 400;
   const mainDist = Math.max(400, D - 300 - 300 - 200);
   const reps = Math.max(2, Math.round(mainDist / mainRep));
@@ -96,8 +96,9 @@ export function swimTechnique(c) {
 
 export function swimEndurance(c) {
   const { phase, p, easyOnly, vol } = c;
-  const D = r100(lerp(2000, 4200, p) * vol);
-  let cont = r100(lerp(600, 3800, Math.pow(p, 1.1)) * (easyOnly ? 0.8 : 1));
+  const pk = c.pk || {};
+  const D = r100(lerp(pk.swimStart ?? 2000, pk.swimMax ?? 4200, p) * vol);
+  let cont = r100(lerp(pk.contStart ?? 600, pk.swimCont ?? 3800, Math.pow(p, 1.1)) * (easyOnly ? 0.8 : 1));
   cont = Math.max(300, Math.min(cont, D - 400));
   const rest = Math.max(0, D - 300 - cont - 200);
   const steps = [
@@ -108,15 +109,15 @@ export function swimEndurance(c) {
   steps.push({ kind: 'cd', dist: 200, zone: 1, text: 'Easy' });
   return {
     sport: 'swim', kind: 'endurance', title: `Continuous swim ${(cont / 1000).toFixed(1)} km`, key: true,
-    focus: `Build the distance you can swim without stopping: ${cont} m this week, 3.8 km by race peak.`,
+    focus: `Build the distance you can swim without stopping: ${cont} m this week, ${((pk.swimCont ?? 3800) / 1000).toFixed(1)} km by race peak.`,
     note: 'Pace is secondary — the goal is the same stroke at minute 50 as at minute 5.',
     steps,
   };
 }
 
 export function runIntervals(c) {
-  const { phase, p, easyOnly, vol, keyAlt } = c;
-  const total = r5(lerp(60, 70, p) * vol);
+  const { phase, p, easyOnly, vol, keyAlt } = c; const pk = c.pk || {};
+  const total = r5(lerp(pk.intStart ?? 60, pk.intMax ?? 70, p) * vol);
   if (easyOnly) return { sport: 'run', kind: 'easy', title: 'Easy run + strides', key: false, focus: 'Recovery: keep HR in Z2.', steps: [
     { kind: 'steady', min: total - 6, zone: 2, target: T.hr(2), text: 'Easy, conversational' },
     { repeat: 6, steps: [{ kind: 'work', min: 0.33, zone: 5, text: 'Stride 20 s, smooth & quick' }, { kind: 'rec', min: 0.67, zone: 1, text: 'Walk back' }] }] };
@@ -144,7 +145,8 @@ export function runIntervals(c) {
 
 export function runBrick(c) {
   const { phase, p, easyOnly, vol } = c;
-  const total = r5(lerp(30, 40, p) * vol);
+  const pk = c.pk || {};
+  const total = r5(lerp(pk.brickStart ?? 30, pk.brickMax ?? 40, p) * vol);
   const z3 = !easyOnly && (phase === 'build' || phase === 'peak') ? 10 : 0;
   const steps = [{ kind: 'steady', min: total - z3, zone: 2, target: T.hr(2), text: 'Straight off the bike (<3 min transition). Short quick steps for the first km, settle into Z2' }];
   if (z3) steps.push({ kind: 'work', min: z3, zone: 3, target: T.hr(3), text: 'Last 10 min at race rhythm (HR Z3)' });
@@ -153,10 +155,12 @@ export function runBrick(c) {
 
 export function runLong(c) {
   const { phase, p, easyOnly, vol } = c;
-  let total = r5(Math.min(180, lerp(90, 180, Math.pow(p, 0.9)) * vol * (easyOnly ? 0.85 : 1)));
+  const pk = c.pk || {};
+  let total = r5(Math.min(pk.runLongMax ?? 180, lerp(Math.min(pk.runLongStart ?? 90, pk.runLongMax ?? 180), pk.runLongMax ?? 180, Math.pow(p, 0.9)) * vol * (easyOnly ? 0.85 : 1)));
+  const runWalkFrom = pk.runWalkFrom ?? 150;
   const steps = [];
   let title;
-  if (total <= 150) {
+  if (total <= runWalkFrom) {
     if (phase === 'peak' && !easyOnly) {
       const mid = 20;
       steps.push({ kind: 'steady', min: total - 2 * mid - 10, zone: 2, target: T.hr(2), text: 'Easy, HR capped at top of Z2. Walk hills if needed to stay under the cap' });
@@ -170,13 +174,13 @@ export function runLong(c) {
     title = `Long run/walk ${Math.floor(total / 60)}h${String(total % 60).padStart(2, '0')}`;
   }
   return { sport: 'run', kind: 'long', title, key: true,
-    focus: total > 150 ? 'Race-day strategy rehearsal: 9 min run / 1 min walk keeps you running to 42 km.' : 'Time on feet at low HR — builds the endurance to run 42 km and pulls your easy pace down.',
+    focus: total > runWalkFrom ? 'Race-day strategy rehearsal: 9 min run / 1 min walk keeps you running to 42 km.' : 'Time on feet at low HR — builds the endurance to run 42 km and pulls your easy pace down.',
     note: 'Fuel every 30 min (30–60 g carbs). Same shoes and gels you plan to race with.', steps };
 }
 
 export function bikePower(c) {
-  const { phase, p, easyOnly, vol, keyAlt, s } = c;
-  const total = r5(lerp(60, 75, p) * vol);
+  const { phase, p, easyOnly, vol, keyAlt, s } = c; const pk = c.pk || {};
+  const total = r5(lerp(pk.powerStart ?? 60, pk.powerMax ?? 75, p) * vol);
   const indoor = true;
   if (easyOnly) return { sport: 'bike', kind: 'endurance', indoor, title: 'Endurance ride (indoor)', key: false, focus: 'Recovery spin.', steps: [
     { kind: 'wu', min: 10, zone: 1, target: T.power(0.45, 0.55), text: 'Easy spin' },
@@ -216,8 +220,12 @@ export function bikePower(c) {
 
 export function bikeLong(c) {
   const { phase, p, easyOnly, vol, s, longBase } = c;
+  const pk = c.pk || {};
+  if (s.indoorMode) return bikeLongIndoor(c);
   const indoor = false;
-  const total = r5(lerp(Math.max(150, longBase || 180), 330, p) * vol * (easyOnly ? 0.75 : 1));
+  const peak = pk.bikeLongMax ?? 330;
+  const start = pk.bikeLongMax != null ? Math.min(Math.max(pk.bikeLongStart ?? 90, longBase || 0) || 120, peak) : Math.max(150, longBase || 180);
+  const total = r5(lerp(start, peak, p) * vol * (easyOnly ? 0.75 : 1));
   const pw = s.outdoorPower; // power meter outdoors?
   const tz2 = pw ? T.power(0.62, 0.72) : T.hr(2);
   const tStrong = pw ? T.power(0.76, 0.85) : T.hr(3);
@@ -225,19 +233,78 @@ export function bikeLong(c) {
   let title;
   if (easyOnly) { steps.push({ kind: 'steady', min: total - 30, zone: 2, target: tz2, text: 'Steady Z2' }); title = 'Long ride (easy)'; }
   else {
-    const [reps, len] = phase === 'base' ? [2, 20] : phase === 'build' ? [3, 30] : phase === 'peak' ? [3, 45] : [2, 15];
+    let [reps, len] = phase === 'base' ? [2, 20] : phase === 'build' ? [3, 30] : phase === 'peak' ? [3, 45] : [2, 15];
+    if (pk.bikeLongMax != null) len = Math.max(10, Math.min(len, Math.floor((total - 40) / reps) - 10));
     const between = 10;
     const used = 20 + 10 + reps * (len + between);
     const pre = Math.max(10, Math.round((total - used) / 2));
     steps.push({ kind: 'steady', min: pre, zone: 2, target: tz2, text: 'Z2, eat every 20 min' });
-    steps.push({ repeat: reps, steps: [{ kind: 'work', min: len, zone: 3, target: tStrong, text: `${len} min strong-steady${pw ? '' : ' (HR Z3, RPE 6/10)'} — this is where average power grows` }, { kind: 'rec', min: between, zone: 2, target: tz2, text: `${between} min Z2` }] });
+    steps.push({ repeat: reps, steps: [{ kind: 'work', min: len, zone: 3, target: tStrong, text: `${len} min strong-steady${pw ? '' : ' (HR Z3, RPE 6/10)'}${pk.climbing ? ' — on climbs if possible, seated, 70–80 rpm' : ' — this is where average power grows'}` }, { kind: 'rec', min: between, zone: 2, target: tz2, text: `${between} min Z2` }] });
     steps.push({ kind: 'steady', min: Math.max(10, total - used - pre), zone: 2, target: tz2, text: 'Z2 to finish, keep eating' });
     title = `Long ride ${Math.floor(total / 60)}h${String(total % 60).padStart(2, '0')} + ${reps}×${len}`;
   }
   steps.push({ kind: 'cd', min: 10, zone: 1, target: pw ? T.power(0.45, 0.55) : T.hr(1), text: 'Easy spin home' });
   return { sport: 'bike', kind: 'long', indoor, title, key: true,
-    focus: 'You already have the distance — now push the average up: strong-steady blocks inside the long ride.',
+    focus: pk.climbing ? 'Climbing endurance: long steady efforts uphill, seated, smooth cadence.' : 'You already have the distance — now push the average up: strong-steady blocks inside the long ride.',
     note: `${pw ? '' : 'Outdoors without a power meter: ride by heart rate and feel, not estimated watts. '}60–90 g carbs per hour.`, steps };
+}
+
+// Indoor Trainer Mode: long ride on the trainer, capped at 3 h, more quality per minute (power targets, indoor FTP).
+export function bikeLongIndoor(c) {
+  const { phase, p, easyOnly, vol, longBase } = c;
+  const pk = c.pk || {};
+  const peak = Math.min(180, pk.bikeLongMax ?? 330);
+  const start = Math.min(peak, Math.max(90, Math.min(longBase || 120, 150)));
+  const total = Math.min(180, r5(lerp(start, peak, p) * vol * (easyOnly ? 0.75 : 1)));
+  const steps = [{ kind: 'wu', min: 15, zone: 1, target: T.power(0.5, 0.65), text: 'Progressive warm-up' }];
+  let title;
+  if (easyOnly) { steps.push({ kind: 'steady', min: total - 25, zone: 2, target: T.power(0.62, 0.72), text: 'Steady Z2, cadence 85–95' }); title = `Indoor endurance ${fmtH(total)}`; }
+  else {
+    const [reps, len, lo, hi] = phase === 'base' ? [3, 20, 0.76, 0.84] : phase === 'build' ? [3, 30, 0.80, 0.88] : phase === 'peak' ? [3, 40, 0.72, 0.78] : [2, 15, 0.72, 0.78];
+    const between = 8;
+    const used = 15 + 10 + reps * (len + between);
+    const pre = Math.max(10, Math.round((total - used) / 2));
+    steps.push({ kind: 'steady', min: pre, zone: 2, target: T.power(0.65, 0.72), text: 'Z2, drink every 10 min (indoors you sweat more)' });
+    steps.push({ repeat: reps, steps: [{ kind: 'work', min: len, zone: 3, target: T.power(lo, hi), text: `${len} min ${phase === 'peak' ? 'race power, aero position' : 'tempo / low sweet spot'}` }, { kind: 'rec', min: between, zone: 2, target: T.power(0.6, 0.68), text: `${between} min Z2` }] });
+    steps.push({ kind: 'steady', min: Math.max(10, total - used - pre), zone: 2, target: T.power(0.65, 0.72), text: 'Z2 to finish' });
+    title = `Indoor long ride ${fmtH(total)} + ${reps}×${len}`;
+  }
+  steps.push({ kind: 'cd', min: 10, zone: 1, target: T.power(0.45, 0.55), text: 'Easy spin' });
+  return { sport: 'bike', kind: 'long', indoor: true, title, key: true,
+    focus: 'Indoor long ride: capped at 3 h, so the blocks are a bit harder than outdoors — same training effect in less time.',
+    note: 'Trainer mode (MyWhoosh). Fan on, 750 ml+ per hour, 60–90 g carbs per hour.', steps };
+}
+const fmtH = m => `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+
+// Extra builders for non-Ironman goals
+export function runTempo(c) {
+  const { phase, p, easyOnly, vol } = c; const pk = c.pk || {};
+  const total = r5(lerp(45, pk.tempoMax ?? 60, p) * vol);
+  if (easyOnly) return runEasy(c);
+  const main = clamp(Math.round(total * (phase === 'base' ? 0.35 : 0.5)), 15, 40);
+  return { sport: 'run', kind: 'tempo', title: `Tempo run ${main} min`, key: true, focus: 'Raise the pace you can hold comfortably-hard for long.', steps: [
+    { kind: 'wu', min: 15, zone: 2, target: T.hr(2), text: 'Easy warm-up' },
+    { kind: 'work', min: main, zone: 3, target: T.pace(1.04, 1.09), text: 'Steady tempo, controlled breathing' },
+    { kind: 'cd', min: Math.max(5, total - 15 - main), zone: 2, target: T.hr(2), text: 'Easy' }] };
+}
+export function swimCss(c) {
+  const { p, easyOnly, vol } = c; const pk = c.pk || {};
+  const D = r100(lerp(pk.swimStart ?? 2000, (pk.swimMax ?? 3000) * 0.8, p) * vol);
+  const reps = clamp(Math.round((D - 800) / 100), 6, 20);
+  return { sport: 'swim', kind: 'css', title: `CSS ${reps}×100`, key: !easyOnly, focus: 'Threshold swim pace — the engine for every distance.', steps: [
+    { kind: 'wu', dist: 400, zone: 1, text: 'Easy + 4×50 build' },
+    { repeat: reps, steps: [{ kind: 'work', dist: 100, zone: easyOnly ? 2 : 4, target: easyOnly ? T.swim(6, 10) : T.swim(-1, 2), text: '100 m, 15 s rest, even splits' }] },
+    { kind: 'cd', dist: 400, zone: 1, text: 'Easy' }] };
+}
+export function bikeHills(c) {
+  const { phase, p, easyOnly, vol } = c; const pk = c.pk || {};
+  const total = r5(lerp(60, pk.powerMax ?? 80, p) * vol);
+  if (easyOnly) return bikeEasy(c);
+  const len = phase === 'base' ? 6 : phase === 'build' ? 8 : 10, reps = clamp(Math.floor((total - 25) / (len + 4)), 3, 6);
+  return { sport: 'bike', kind: 'hills', indoor: true, title: `Climbing ${reps}×${len} min`, key: true, focus: 'Sustained climbing power at low cadence.', steps: [
+    { kind: 'wu', min: 15, zone: 2, target: T.power(0.5, 0.7), text: 'Progressive warm-up' },
+    { repeat: reps, steps: [{ kind: 'work', min: len, zone: 4, target: T.power(0.88, 0.95), text: `${len} min seated climb, 65–75 rpm` }, { kind: 'rec', min: 4, zone: 1, target: T.power(0.5, 0.55), text: 'Easy' }] },
+    { kind: 'cd', min: Math.max(5, total - 15 - reps * (len + 4)), zone: 1, target: T.power(0.45, 0.6), text: 'Easy' }] };
 }
 
 export function bikeEasy(c) {
@@ -259,6 +326,9 @@ export const ROLES = {
   'bike-power': { sport: 'bike', label: 'Bike – indoor power', build: bikePower },
   'bike-long': { sport: 'bike', label: 'Bike – long (outdoor)', build: bikeLong },
   'bike-easy': { sport: 'bike', label: 'Bike – easy', build: bikeEasy },
+  'bike-hills': { sport: 'bike', label: 'Bike – climbing intervals', build: bikeHills },
+  'run-tempo': { sport: 'run', label: 'Run – tempo', build: runTempo },
+  'swim-css': { sport: 'swim', label: 'Swim – CSS intervals', build: swimCss },
 };
 
 // Race week (short openers) + race day
@@ -269,7 +339,7 @@ export function raceWeek(dates, s, raceDate) {
     [2, S('run', 'openers', 'Run 45 min + race efforts', [{ kind: 'wu', min: 15, zone: 2, target: T.hr(2), text: 'Easy' }, { repeat: 3, steps: [{ kind: 'work', min: 5, zone: 3, target: T.hr(3), text: '5 min race effort' }, { kind: 'rec', min: 3, zone: 1, text: 'Easy' }] }, { kind: 'cd', min: 6, zone: 2, target: T.hr(2), text: 'Easy' }])],
     [3, S('swim', 'openers', 'Swim openers', [{ kind: 'wu', dist: 400, zone: 1, text: 'Easy' }, { repeat: 6, steps: [{ kind: 'work', dist: 50, zone: 3, target: T.swim(-2, 3), text: 'Fast 50, relaxed' }] }, { kind: 'cd', dist: 300, zone: 1, text: 'Easy' }])],
     [4, S('bike', 'openers', 'Bike 60 min + race blocks', [{ kind: 'wu', min: 15, zone: 1, target: T.power(0.5, 0.62), text: 'Easy' }, { repeat: 3, steps: [{ kind: 'work', min: 6, zone: 3, target: T.power(0.72, 0.78), text: '6 min race power' }, { kind: 'rec', min: 4, zone: 1, target: T.power(0.5, 0.55), text: 'Easy' }] }, { kind: 'cd', min: 15, zone: 2, target: T.power(0.55, 0.65), text: 'Easy' }], { indoor: true })],
-    [4, S('run', 'openers', 'Run off the bike 15 min', [{ kind: 'steady', min: 15, zone: 2, target: T.hr(2), text: 'Easy, quick feet' }])],
+    [4, S('run', 'openers', 'Run off the bike 15 min', [{ kind: 'steady', min: 15, zone: 2, target: T.hr(2), text: 'Easy, quick feet' }], { brickOnly: true })],
     [5, S('run', 'strides', 'Shake-out 20 min', [{ kind: 'steady', min: 16, zone: 2, target: T.hr(2), text: 'Very easy' }, { repeat: 4, steps: [{ kind: 'work', min: 0.33, zone: 4, text: 'Stride' }, { kind: 'rec', min: 0.67, zone: 1, text: 'Walk' }] }])],
   ];
   return out.filter(([d]) => dates[d] && dates[d] < raceDate);
@@ -287,3 +357,32 @@ export function stepsText(steps, ctx, indent = '') {
   return out;
 }
 export function fmtMin(m) { if (m < 1) return `${Math.round(m * 60)} s`; return Number.isInteger(m) ? `${m} min` : `${Math.floor(m)}:${String(Math.round((m % 1) * 60)).padStart(2, '0')} min`; }
+
+// MyWhoosh library matches (only workouts verified to exist in the MyWhoosh library; structure noted so the
+// athlete can judge the fit). Anything else → ride the prescribed steps manually in ERG mode.
+const MW = {
+  ss12: { name: 'Sweetspot 12 minute', what: '≈1 h · 2×12 min @ 88% FTP + 4×1 min high cadence' },
+  ss15: { name: 'Sweet Spot 15', what: '≈1 h · 2×15 min @ 88% FTP' },
+  ss20: { name: 'Sweetspot 20 minute', what: '≈1 h · 1×20 min sweet spot + 5×1 min' },
+  thr: { name: 'Threshold #2', what: '≈1 h · ~35 min at threshold' },
+  ou: { name: 'Climbing Fartlek #2', what: '1 h · 3 blocks of over-unders (89% / 104% FTP)' },
+  z2: { name: 'Zone 2 Endurance #1', what: '1 h · steady Zone 2' },
+  climb: { name: 'Climbing Sustained Threshold #1', what: '≈1 h · 4×5 min @ 90% FTP' },
+};
+export function myWhoosh(sess) {
+  if (sess.sport !== 'bike' || !sess.indoor) return null;
+  const t = sess.title || '';
+  let m = null, fit = 'close';
+  if (/Sweet spot \d+×12/i.test(t)) { m = MW.ss12; fit = /2×12/.test(t) ? 'match' : 'close'; }
+  else if (/Sweet spot \d+×15/i.test(t)) { m = MW.ss15; fit = /2×15/.test(t) ? 'match' : 'close'; }
+  else if (/Sustained power|2×20/i.test(t)) m = MW.ss20;
+  else if (/Threshold \d+×10/i.test(t)) m = MW.thr;
+  else if (/Over-unders/i.test(t)) m = MW.ou;
+  else if (/Climbing \d+×/i.test(t)) m = MW.climb;
+  else if (sess.kind === 'endurance' && sess.min <= 75) { m = MW.z2; fit = 'match'; }
+  const diff = m ? Math.round(sess.min - 60) : 0;
+  return {
+    name: m?.name || null, what: m?.what || '', fit,
+    manual: m ? (Math.abs(diff) >= 10 ? (diff > 0 ? `Add ${diff} min Zone 2 at the end (free ride, ERG ${'~'}65% FTP).` : `Stop ${-diff} min early.`) : '') : 'No matching MyWhoosh preset — use Free Ride in ERG mode and set the watts of each step below.',
+  };
+}

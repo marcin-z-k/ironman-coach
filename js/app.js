@@ -9,6 +9,10 @@ import { renderToday, renderPlan, renderActivities, renderProgress, renderSettin
 import { exportFit, exportZwo, icuEvent } from './export.js';
 import { isoDate, addDays } from './util.js';
 import { prefetch } from './streams.js';
+import { aiCoachPrompt, importPlan, exportPlan, goalFromMeta } from './customplan.js';
+import { setCache, getCache } from './store.js';
+import { el, esc } from './util.js';
+import { download } from './export.js';
 import { renderFuelSheet } from './ui.js';
 
 const view = document.getElementById('view');
@@ -43,7 +47,7 @@ let streamsBusy = false;
 async function loadRunStreams() {
   if (streamsBusy || !data?.activities) return;
   const from = isoDate(addDays(new Date(), -140));
-  const runs = data.activities.filter(a => a.sport === 'run' && a.date >= from && a.avgHr && a.movingSec >= 1200);
+  const runs = data.activities.filter(a => a.avgHr && ((a.sport === 'run' && a.date >= from && a.movingSec >= 1200) || (a.sport === 'bike' && !a.indoor && a.date >= isoDate(addDays(new Date(), -70)) && a.movingSec >= 3600)));
   if (!runs.length) return;
   streamsBusy = true;
   try {
@@ -51,12 +55,51 @@ async function loadRunStreams() {
   } finally { streamsBusy = false; ui.streamsLoading = null; A = null; if (sheet.hidden) { ui.keepScroll(); render(); } }
 }
 
+function planAction(kind) {
+  const s = load();
+  if (kind === 'prompt') { download(new Blob([aiCoachPrompt()], { type: 'text/markdown' }), 'ironman-coach-ai-plan-prompt.md'); toast('Prompt downloaded — give it to your AI'); return; }
+  if (kind === 'export') { if (!A) compute(); download(new Blob([JSON.stringify(exportPlan(A.plan, s, s.planSource === 'custom' ? (s.customName || 'Imported plan') : `${s.raceName} plan`), null, 1)], { type: 'application/json' }), `ironman-coach-plan-${isoDate(new Date())}.json`); return; }
+  if (kind === 'reset') {
+    if (!ui.confirm('Switch back to the default plan? Imported plan and goal selection are cleared (your default plan was never changed).')) return;
+    setCache('customPlan', null); save({ planSource: 'default', customName: null, moves: {} }); A = null; toast('Back to the default plan'); setTab('today'); return;
+  }
+  if (kind === 'import') {
+    const node = el(`<div class="detail"><div class="detail-head"><button class="icon-btn" data-close>✕</button><div class="detail-title">Import a training plan</div></div>
+      <p class="small muted">Choose the JSON file(s) your AI produced (several parts are merged), or paste the AI's whole reply — the JSON is found automatically.</p>
+      <input type="file" accept=".json,.txt,.md,application/json,text/plain" multiple class="filein">
+      <textarea class="paste" rows="8" placeholder="…or paste here"></textarea>
+      <button class="btn" data-go>Check & import</button>
+      <div class="imp-out"></div></div>`);
+    node.querySelector('[data-close]').onclick = () => closeSheet();
+    node.querySelector('[data-go]').onclick = async () => {
+      const out = node.querySelector('.imp-out');
+      const texts = [];
+      for (const f of node.querySelector('.filein').files) texts.push(await f.text());
+      const pasted = node.querySelector('.paste').value.trim(); if (pasted) texts.push(pasted);
+      if (!texts.length) { out.innerHTML = '<div class="adjust-banner bad"><span>!</span><div>Choose a file or paste the JSON.</div></div>'; return; }
+      let r;
+      try { r = importPlan(texts, load()); } catch (e) { out.innerHTML = `<div class="adjust-banner bad"><span>!</span><div><b>Not valid JSON.</b> ${esc(e.message)}</div></div>`; return; }
+      const list = (arr) => arr.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join('') + (arr.length > 12 ? `<li>…and ${arr.length - 12} more</li>` : '');
+      if (!r.plan || !r.meta?.sessions) { out.innerHTML = `<div class="adjust-banner bad"><span>!</span><div><b>Could not import.</b><ul>${list(r.errors)}</ul></div></div>`; return; }
+      const docs = texts;
+      out.innerHTML = `<div class="adjust-banner ${r.errors.length ? '' : 'good'}"><span>${r.errors.length ? '!' : '✓'}</span><div><b>${esc(r.meta.name || 'Plan')}</b>: ${r.meta.weeks} weeks, ${r.meta.sessions} sessions, race ${esc(r.plan.raceDate)}.${r.errors.length ? `<br>${r.errors.length} problem(s) — those sessions are skipped:<ul>${list(r.errors)}</ul>` : ''}${r.warnings.length ? `<ul>${list(r.warnings)}</ul>` : ''}</div></div><button class="btn" data-use style="margin-top:10px">Use this plan</button>`;
+      out.querySelector('[data-use]').onclick = () => {
+        setCache('customPlan', docs);
+        const g = goalFromMeta(r.meta.goal);
+        save({ planSource: 'custom', customName: r.meta.name || 'Imported plan', raceDate: r.plan.raceDate, ...(r.meta.goal?.raceName ? { raceName: r.meta.goal.raceName } : {}), ...(g ? { goal: g } : {}), moves: {} });
+        A = null; closeSheet(); toast('Plan imported'); setTab('plan');
+      };
+    };
+    openSheet(node);
+  }
+}
+
 const ui = {
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today',
   trendRange: 30, selectedDate: null,
   openWeeks: new Set(), openWeeksTouched: false, openSess: new Set(), openActs: new Set(),
   pending: [],
-  openSheet, closeSheet,
+  openSheet, closeSheet, planAction,
   rerender: () => render(),
   invalidate: () => { A = null; render(); },
   keepScroll: () => { keepScrollY = window.scrollY; },
@@ -106,6 +149,7 @@ function setTab(t) {
   ui.tab = t;
   if (location.hash.slice(1) !== t) history.replaceState(null, '', '#' + t);
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  document.getElementById('btnSettings').classList.toggle('on', t === 'settings');
   keepScrollY = null;
   render();
   window.scrollTo({ top: 0 });
@@ -197,6 +241,8 @@ async function sync(fromLogin = false) {
   try {
     data = await fetchAll({ days: 150 });
     setZoneModel(buildZoneModel(data.athlete));
+    const rhr = (data.wellness || []).map(w => w.restingHR).filter(Boolean).slice(-14);
+    if (rhr.length) save({ restHr: Math.round(rhr.sort((a, b) => a - b)[rhr.length >> 1]) });
     updateThresholds();
     loadRunStreams();
     A = null;
@@ -215,6 +261,7 @@ async function sync(fromLogin = false) {
 
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 btnRefresh.onclick = () => sync();
+document.getElementById('btnSettings').onclick = () => setTab('settings');
 document.getElementById('btnFuel').onclick = () => openSheet(renderFuelSheet(ui));
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t.startsWith('trend-')) { keepScrollY = null; render(); window.scrollTo({ top: 0 }); return; } if (TABS.includes(t)) { if (t !== ui.tab) setTab(t); else render(); } });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && data?.fetchedAt && Date.now() - data.fetchedAt > 30 * 60000) sync(); });
