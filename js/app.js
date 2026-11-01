@@ -48,7 +48,7 @@ async function loadRunStreams() {
   if (streamsBusy || !data?.activities) return;
   const from = isoDate(addDays(new Date(), -140));
   const d70 = isoDate(addDays(new Date(), -70));
-  const runs = data.activities.filter(a => (a.sport === 'run' && a.date >= from && a.movingSec >= 600) || (a.sport === 'bike' && a.date >= d70 && a.movingSec >= 1200));
+  const runs = data.activities.filter(a => (a.sport === 'run' && a.date >= from && a.movingSec >= 600) || (a.sport === 'bike' && a.date >= d70 && a.movingSec >= 1200) || (a.sport === 'swim' && a.date >= isoDate(addDays(new Date(), -56))));
   if (!runs.length) return;
   streamsBusy = true;
   try {

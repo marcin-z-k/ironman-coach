@@ -7,7 +7,7 @@
 //        then run/walk at ~1.35× easy pace. Threshold changes shift easy pace 1:1.
 import { isoDate, addDays, round, clamp } from './util.js';
 import { hrZoneOf } from './zones.js';
-import { easyPaceSeries, continuousRun } from './analytics.js';
+import { easyPaceSeries, continuousRun, continuousSwim } from './analytics.js';
 import { raceDistances } from './goals.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -19,7 +19,10 @@ export function baseline(acts, s) {
   const swims = since(acts, 56).filter(a => a.sport === 'swim' && a.pace100 && a.distanceM >= 800);
   const sp = swims.map(a => a.pace100).filter(p => p >= 70 && p <= 240);
   out.swimPace = sp.length ? Math.round(median(sp)) : s.css + 12;
-  out.swimCont = s.swimContinuous || 600;
+  const cs = continuousSwim(acts, 56);
+  out.swimContInfo = cs;
+  out.swimCont = clamp(Math.round((s.swimContinuous || (cs ? cs.m : 400)) / 50) * 50, 100, 10000);
+  out.notes.swimCont = s.swimContinuous ? 'your Settings value' : cs ? `longest swim without a break > 2 min: ${cs.m} m (${cs.date}, ${cs.swims} swims checked)` : 'no swim data — 400 m assumed';
   out.notes.swim = swims.length ? `median of ${swims.length} swims (8 wk)` : 'CSS + 12 s (no recent swims)';
   // bike — long outdoor rides
   const rides = since(acts, 70).filter(a => a.sport === 'bike' && !a.indoor && a.movingSec >= 2.5 * 3600 && a.distanceM > 0);

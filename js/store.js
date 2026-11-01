@@ -14,7 +14,7 @@ export const DEFAULTS = {
   ftp: 150,                 // W — INDOOR (trainer) FTP, used for indoor power targets
   ftpOutdoor: null,         // W — outdoor FTP (only meaningful with an outdoor power meter)
   outdoorPower: false,      // power meter on the outdoor bike?
-  swimContinuous: 600,      // m you can swim without stopping (race predictor)
+  swimContinuous: null,     // m you can swim without stopping (null = from your swims)
   runContinuous: null,      // km you can run without walking (null = from longest run)
   weekTemplate: null,       // null = default fixed week
   moves: {},                // manual day swaps {sessionId: date}
@@ -43,6 +43,7 @@ export function load() {
   try {
     const raw = localStorage.getItem(KEY);
     state = raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+    if (!state.mig2) { if (state.swimContinuous === 600) state.swimContinuous = null; state.mig2 = true; }   // 600 was only the old default
   } catch { state = { ...DEFAULTS }; }
   return state;
 }

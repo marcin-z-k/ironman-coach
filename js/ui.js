@@ -338,7 +338,7 @@ function summaryBadge(sm) { if (!sm) return '<span class="pill">…</span>'; con
 export function renderProgress(A, ui, data) {
   const root = h('<div class="stack" style="gap:12px"></div>');
   const acts = data?.activities || [];
-  root.append(simulatorCard(A, ui));
+  root.append(simulatorCard(A, ui, acts));
   root.append(loadCard(acts, data?.wellness || []));
   root.append(pmcCard(A, data, ui));
   root.append(tizCard(acts, ui));
@@ -353,21 +353,24 @@ export function renderProgress(A, ui, data) {
 // ---- what-if race simulator -----------------------------------------------------
 // Simulator inputs are the user's: stored in settings, never touched by new estimates.
 // Only the "Estimate" button overwrites them (all sliders + wetsuit) with the current estimates.
-function simEstimates(s, b) {
-  return { ftp: s.ftp, css: s.css, thr: s.runThreshold, swimCont: b.swimCont, runCont: round(b.runCont, 1), wetsuit: true, at: isoDate(new Date()) };
+function simEstimates(s, b, acts) {
+  return { ftp: outdoorFtpNow(acts, s), css: s.css, thr: s.runThreshold, swimCont: b.swimCont, runCont: round(b.runCont, 1), at: isoDate(new Date()) };
 }
-function simulatorCard(A, ui) {
+// The race bike course is outdoors → the simulator works with your OUTDOOR FTP.
+function outdoorFtpNow(acts, s) { if (s.outdoorPower && s.ftpOutdoor) return s.ftpOutdoor; const c = ftpCoupling(acts, s); return c.outdoorNow || s.ftpOutdoor || s.ftp; }
+function simulatorCard(A, ui, acts = []) {
   let s = load();
   const b = A.goal.base;
-  const est = simEstimates(s, b);
-  if (!s.sim) s = save({ sim: { ...est } });
-  const d = { ...est, ...s.sim };                       // stored user values win
+  const est = simEstimates(s, b, acts);
+  if (!s.sim || !s.sim.outdoorFtp) s = save({ sim: { wetsuit: true, ...(s.sim || {}), ftp: est.ftp, outdoorFtp: true } });   // one-time switch to outdoor FTP
+  const d = { ...est, wetsuit: true, ...s.sim };        // stored user values win
+  const ftpRef = est.ftp;                               // bike speed b.bikeKmh comes from outdoor rides = current outdoor FTP
   const persist = () => { save({ sim: { ...d } }); };
-  const delta = () => ({ ftp: d.ftp - s.ftp, css: d.css - s.css, thr: d.thr - s.runThreshold, swimCont: d.swimCont, runCont: d.runCont, wetsuit: d.wetsuit });
+  const delta = () => ({ ftp: d.ftp - ftpRef, css: d.css - s.css, thr: d.thr - s.runThreshold, swimCont: d.swimCont, runCont: d.runCont, wetsuit: d.wetsuit });
   const goal = (s.goalHours || 12) * 3600;
   const lo = (k, v) => Math.min(v, d[k]), hi = (k, v) => Math.max(v, d[k]);
   const card = h(`<div class="card hero sim">
-    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn small" data-est title="Replace all slider values and the wetsuit setting with the current estimates">Estimate</button></div>
+    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn small" data-est title="Replace all slider values with the current estimates (wetsuit stays as you set it)">Estimate</button></div>
     <div class="row between" style="margin-top:6px"><div class="big mono" data-o="total"></div><span class="pill" data-o="gap"></span></div>
     <div class="splitbar" data-o="bar"><span class="sw"></span><span class="bk"></span><span class="rn"></span><span class="tr"></span><i class="goal"></i></div>
     <div class="split" style="margin-top:12px">
@@ -377,7 +380,7 @@ function simulatorCard(A, ui) {
       <div class="metric"><div class="v" data-o="trans"></div><div class="k">Transitions</div></div>
     </div>
     <div class="sliders">
-      ${slider('ftp', 'Bike FTP', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
+      ${slider('ftp', 'Bike FTP (outdoor)', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
       ${slider('css', 'Swim CSS', lo('css', est.css - 20), hi('css', est.css + 15), 1)}
       ${slider('thr', 'Run threshold', lo('thr', est.thr - 90), hi('thr', est.thr + 30), 1)}
       ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim, d.swimCont), 100)}
@@ -386,20 +389,20 @@ function simulatorCard(A, ui) {
     </div>
     <div class="small muted" data-o="estnote" style="margin-top:8px"></div>
     <details class="more" style="margin-top:10px"><summary>How this is calculated</summary><div class="small muted" style="line-height:1.55">
-      Slider values are yours and are kept across syncs and app updates. <b>Estimate</b> replaces all of them (incl. wetsuit) with the current estimates.<br>
-      <b>Swim</b> — your pool session pace (${esc(b.notes.swim)}). Beyond the distance you can swim without stopping, pace fades ~8% per doubling and each forced stop costs ~25 s. Wetsuit −5%.<br>
-      <b>Bike</b> — speed of your long outdoor rides (${esc(b.notes.bike)}), +2% race day. FTP changes scale speed with the cube root of power.<br>
+      Slider values are yours and are kept across syncs and app updates. <b>Estimate</b> replaces the sliders with the current estimates; the wetsuit switch is only ever changed by you.<br>
+      <b>Swim</b> — your pool session pace (${esc(b.notes.swim)}). Continuous swim estimate: ${esc(b.notes.swimCont || '')} — pauses at the wall shorter than 2 min don't count as breaks. Beyond that distance pace fades ~8% per doubling and each forced stop costs ~25 s. Wetsuit −5%.<br>
+      <b>Bike</b> — speed of your long outdoor rides (${esc(b.notes.bike)}), +2% race day. The slider is your <b>outdoor</b> FTP (race course is outdoors; now ${est.ftp} W); changes scale speed with the cube root of power.<br>
       <b>Run</b> — easy pace at Z2 HR (${esc(b.notes.run)}), +6% off the bike. Continuous run estimate: ${esc(b.notes.runCont || '')}. Stretches slower than 9:00/km for over 2 min count as walking (short GPS glitches don't). Beyond that distance: run/walk at 1.35× easy pace. Moving the run threshold shifts easy pace by the same amount.<br>
       <b>Transitions</b> 12 min.</div></details>
   </div>`);
   const out = k => card.querySelector(`[data-o="${k}"]`);
-  const D0 = predict(b, s, delta()).D;
+  const D0 = predict(b, { ...s, ftp: ftpRef }, delta()).D;
   if (!D0.swim) { card.querySelector('[data-o="swim"]').closest('.metric').remove(); card.querySelector('[data-k="css"]').closest('.sl').remove(); card.querySelector('[data-k="swimCont"]').closest('.sl').remove(); card.querySelector('[data-k="wetsuit"]').closest('label').remove(); }
   if (!D0.bike) { card.querySelector('[data-o="bike"]').closest('.metric').remove(); card.querySelector('[data-k="ftp"]').closest('.sl').remove(); }
   if (!D0.run) { card.querySelector('[data-o="run"]').closest('.metric').remove(); card.querySelector('[data-k="thr"]').closest('.sl').remove(); card.querySelector('[data-k="runCont"]').closest('.sl').remove(); }
   if (!D0.trans) card.querySelector('[data-o="trans"]').closest('.metric').remove();
   const update = () => {
-    const p = predict(b, s, delta());
+    const p = predict(b, { ...s, ftp: ftpRef }, delta());
     out('total').textContent = fmtSec(p.totalSec);
     const diff = p.totalSec - goal;
     out('total').className = 'big mono ' + (diff <= 0 ? 'sport-run' : 'sport-bike');
@@ -436,7 +439,7 @@ function simulatorCard(A, ui) {
   };
   card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; inp.onchange = persist; });
   const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; persist(); update(); };
-  card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b) } }); ui.keepScroll(); ui.rerender(); };
+  card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b, acts), wetsuit: d.wetsuit, outdoorFtp: true } }); ui.keepScroll(); ui.rerender(); };   // wetsuit stays yours
   update();
   return card;
 }
@@ -591,8 +594,8 @@ function couplingCard(acts, ui) {
     </div>
     <div style="margin-top:14px"><div class="row between small"><span>Indoor target to reach ${c.target} W outdoors: <b>${c.indoorTarget} W</b></span><b>${Math.round(c.progress * 100)}%</b></div>
       <div class="progress glow"><span style="width:${Math.min(100, c.progress * 100)}%"></span></div>
-      <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Ratio calibrated ${c.calib.date ? fmtDate(c.calib.date, { day: 'numeric', month: 'short' }) + ' ' : ''}from ${esc(c.calib.source)}${c.est ? ` · current outdoor estimate from ${c.est.n} rides: ${c.est.ftp} W (avg ${c.est.avgP} W on those rides)` : ''}. As indoor FTP rises, the outdoor value scales with the same ratio.</div></div>
-    ${c.ratio > 1.4 && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting) or with tailwind. If it looks wrong, enter your outdoor FTP baseline in Settings.</div></div>` : ''}</div>`));
+      <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Ratio calibrated ${c.calib.date ? fmtDate(c.calib.date, { day: 'numeric', month: 'short' }) + ' ' : ''}from ${esc(c.calib.source)}${c.est && c.calib.source === 'your outdoor FTP' ? ` · automatic outdoor estimate: ${c.est.ftp} W` : ''}. As indoor FTP rises, the outdoor value scales with the same ratio.</div></div>
+    ${c.ratio > 1.4 && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting). If it looks wrong, enter your outdoor FTP baseline in Settings.</div></div>` : ''}</div>`));
   return card;
 }
 
@@ -653,7 +656,7 @@ export function renderSettings(ui, onSave) {
       <div class="grid2">
         <div class="field"><label>Run threshold pace (min/km)</label><input name="runThreshold" value="${paceToStr(s.runThreshold)}" placeholder="5:40"></div>
         <div class="field"><label>Swim CSS (min/100m)</label><input name="css" value="${paceToStr(s.css)}" placeholder="1:50"></div>
-        <div class="field"><label>Longest swim without stopping (m)</label><input name="swimContinuous" type="number" min="50" max="5000" step="50" value="${s.swimContinuous || 600}"></div>
+        <div class="field"><label>Longest swim without stopping (m)</label><input name="swimContinuous" type="number" min="50" max="10000" step="50" value="${s.swimContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Longest run without walking (km)</label><input name="runContinuous" type="number" min="1" max="42.2" step="0.5" value="${s.runContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Weight (kg)</label><input name="weightKg" type="number" min="40" max="150" value="${s.weightKg}"></div>
       </div>
@@ -723,7 +726,7 @@ export function renderSettings(ui, onSave) {
       corsProxy: fd.get('corsProxy').trim(), raceName: fd.get('raceName').trim() || 'Ironman', raceDate: fd.get('raceDate'), goalHours: +fd.get('goalHours') || 12,
       ftp: +fd.get('ftp') || s.ftp, ftpOutdoor: +fd.get('ftpOutdoor') || null, outdoorPower: fd.get('outdoorPower') === 'on',
       weightKg: +fd.get('weightKg') || 75, runThreshold: strToPace(fd.get('runThreshold')) || s.runThreshold, css: strToPace(fd.get('css')) || s.css,
-      swimContinuous: +fd.get('swimContinuous') || 600, runContinuous: +fd.get('runContinuous') || null,
+      swimContinuous: +fd.get('swimContinuous') || null, runContinuous: +fd.get('runContinuous') || null,
       thresholdSource: fd.get('thresholdSource'), demo: fd.get('demo') === 'on', weekTemplate: tpl.length ? tpl : null,
       planSource: fd.get('planSource') || 'default', indoorMode: fd.get('indoorMode') === 'on',
       goal: fd.get('planSource') === 'custom' ? s.goal : { type: fd.get('goalType'), tri: fd.get('goalTri'), runKm: +fd.get('goalRunKm') || 42.195, bikeKm: +fd.get('goalBikeKm') || 100, bikeHm: +fd.get('goalBikeHm') || 0, swimM: +fd.get('goalSwimM') || 3800 },

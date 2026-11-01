@@ -233,7 +233,7 @@ export function bestWindowFrac(vals, other, ok, sec, minFrac = 0.6) {
   return best == null ? null : { mean: best, other: bestO };
 }
 // steady 3-min blocks: [avg output, avg HR of the last 2 min] (skip first 10 min — HR lag / warm-up)
-export function steadyBlocks(out, hr, time, ok, blockSec = 180) {
+export function steadyBlocks(out, hr, time, ok, blockSec = 180, cvMax = 0.15) {
   const res = [];
   for (let i = 0; i + blockSec <= out.length; i += blockSec) {
     if ((time?.[i] ?? i) < 600) continue;
@@ -242,8 +242,26 @@ export function steadyBlocks(out, hr, time, ok, blockSec = 180) {
     if (seg.length < blockSec * 0.85 || hseg.length < 60) continue;
     const m = seg.reduce((a, b) => a + b, 0) / seg.length;
     const cv = Math.sqrt(seg.reduce((a, b) => a + (b - m) ** 2, 0) / seg.length) / m;
-    if (cv > 0.15 || m <= 0) continue;
+    if (cv > cvMax || m <= 0) continue;
     res.push([hseg.reduce((a, b) => a + b, 0) / hseg.length, m]);
   }
   return res;
+}
+
+// Longest pool/open-water swim without a real break. Short pauses at the wall (goggles, waiting for
+// others, turning) don't count — only a pause longer than BREAK_SEC does.
+export const SWIM_BREAK_SEC = 120;
+export function longestContinuousSwim(st) {
+  if (!st?.dist || !st.time || st.n < 60) return null;
+  let best = 0, segStart = st.dist[0] || 0, lastMoveT = st.time[0], lastMoveD = st.dist[0] || 0;
+  for (let i = 1; i < st.n; i++) {
+    const t = st.time[i], d = st.dist[i];
+    if (d == null || t == null) continue;
+    if (d - lastMoveD >= 3) {                       // moved (≥ 3 m since the last movement)
+      if (t - lastMoveT > SWIM_BREAK_SEC) segStart = lastMoveD;     // the pause before this was a real break
+      lastMoveT = t; lastMoveD = d;
+      best = Math.max(best, d - segStart);
+    }
+  }
+  return best > 0 ? Math.round(best) : null;
 }
