@@ -1,5 +1,6 @@
 // Custom training plans: JSON format "ironman-coach-plan/v1" — import (validate + convert), export,
 // and the downloadable AI-coach prompt that makes another AI produce exactly this format.
+import { racesFromMeta, perfGoalsFromMeta, fmtGoalTime } from './races.js';
 import { isoDate, addDays, startOfWeek, parseDate, paceToStr, strToPace, round } from './util.js';
 import { finalize, T, flatten, ftpFor } from './workouts.js';
 import { hrZoneOf } from './zones.js';
@@ -85,6 +86,8 @@ export function importPlan(input, s) {
     if (d.format && d.format !== FORMAT) warns.push(`format "${d.format}" — expected "${FORMAT}", trying anyway`);
     if (!Array.isArray(d.weeks)) { errs.push('Missing "weeks" array'); continue; }
     meta ||= d;
+    if (Array.isArray(d.races) && !meta.races) meta = { ...meta, races: d.races };
+    if (Array.isArray(d.performanceGoals) && !meta.performanceGoals) meta = { ...meta, performanceGoals: d.performanceGoals };
     weeksIn.push(...d.weeks);
   }
   if (!weeksIn.length) return { ok: false, errors: errs.length ? errs : ['No weeks found'], warnings: warns };
@@ -116,7 +119,9 @@ export function importPlan(input, s) {
   sessions.sort((a, b) => a.date.localeCompare(b.date));
   const first = isoDate(startOfWeek(parseDate(sessions[0].date)));
   const last = sessions[sessions.length - 1].date;
-  const raceDate = meta?.goal?.raceDate ? isoDate(parseDate(meta.goal.raceDate)) : last;
+  const races = racesFromMeta(meta);
+  const lastRace = races.map(r => r.date).sort().pop();
+  const raceDate = lastRace || (meta?.goal?.raceDate ? isoDate(parseDate(meta.goal.raceDate)) : last);
   const end = raceDate > last ? raceDate : last;
   const weeks = [];
   for (let ws = first, i = 0; ws <= end; ws = isoDate(addDays(parseDate(ws), 7)), i++) {
@@ -132,14 +137,15 @@ export function importPlan(input, s) {
     weeks.push({ index: i, wtg: 0, start: ws, end: dates[6], dates, phase, recovery: inW.some(x => x.recovery), hours: round(plannedMin / 60, 2), sessions: sess, plannedLoad: sess.reduce((a, x) => a + x.tss, 0), plannedMin, focus: inW[0]?.wFocus || '' });
   }
   weeks.forEach(w => { w.wtg = weeks.length - 1 - w.index; });
-  if (raceDate && !sessions.some(x => x.date === raceDate)) {
-    const w = weeks.find(x => raceDate >= x.start && raceDate <= x.end);
-    if (w) w.sessions.push({ sport: 'brick', kind: 'race', title: meta?.goal?.raceName || 'Race day', min: 0, tss: 0, if: 0.7, key: true, steps: [], dow: w.dates.indexOf(raceDate), date: raceDate, origDate: raceDate, id: `${w.start}-race` });
+  const raceList = races.length ? races : (raceDate ? [{ date: raceDate, name: meta?.goal?.raceName || 'Race day', id: 'r0' }] : []);
+  for (const r of raceList) {
+    const w = weeks.find(x => r.date >= x.start && r.date <= x.end);
+    if (w && !w.sessions.some(x => x.kind === 'race' && x.date === r.date)) w.sessions.push({ sport: 'brick', kind: 'race', title: r.name || 'Race day', min: 0, tss: 0, if: 0.7, key: true, steps: [], dow: w.dates.indexOf(r.date), date: r.date, origDate: r.date, id: `${w.start}-race-${r.id}`, raceId: r.id });
   }
   return {
     ok: errs.length === 0 || sessions.length > 0, errors: errs, warnings: warns,
     plan: { weeks, totalWeeks: weeks.length - 1, anchor: first, raceDate, template: [], custom: true, name: meta?.name || 'Imported plan', zones: zones(s), baseHours: weeks[0]?.hours || 0 },
-    meta: { name: meta?.name, goal: meta?.goal || null, athlete: meta?.athlete || null, sessions: sessions.length, weeks: weeks.length },
+    meta: { name: meta?.name, goal: meta?.goal || null, athlete: meta?.athlete || null, sessions: sessions.length, weeks: weeks.length, races, perfGoals: perfGoalsFromMeta(meta) },
   };
 }
 
@@ -161,6 +167,8 @@ export function exportPlan(plan, s, name = 'Ironman Coach plan') {
   return {
     format: FORMAT, name,
     goal: { type: s.goal?.type || 'triathlon', distance: s.goal?.tri || 'full', raceName: s.raceName, raceDate: s.raceDate, goalTime: s.goalHours ? `${s.goalHours}h` : undefined },
+    ...((s.races || []).length ? { races: s.races.map(r => ({ name: r.name, date: r.date, type: r.type === 'triathlon' ? 'triathlon' : r.type, ...(r.type === 'triathlon' ? { distance: r.tri } : r.type === 'swim' ? { distance: r.m } : r.type.startsWith('stoneman') ? { level: r.level || 'gold' } : { distance: r.km, elevationM: r.hm || 0 }), ...(r.surface ? { surface: r.surface } : {}), ...(r.goalTime ? { goalTime: fmtGoalTime(r.goalTime) } : {}) })) } : {}),
+    ...((s.perfGoals || []).length ? { performanceGoals: s.perfGoals.map(g => ({ metric: g.metric, target: g.metric === 'ftp' ? g.target : paceToStr(g.target), date: g.date })) } : {}),
     athlete: { ftpIndoorW: s.ftp, runThresholdPace: paceToStr(s.runThreshold), cssPer100m: paceToStr(s.css), weightKg: s.weightKg },
     weeks: plan.weeks.map(w => ({
       week: w.index + 1, start: w.start, phase: w.phase, recovery: !!w.recovery,
@@ -183,13 +191,16 @@ You are my personal endurance coach (triathlon, running, cycling, swimming). You
 
 Ask in short rounds of 3–6 questions. Summarise what you learned after each round. Cover:
 
-**1. Goal**
-- What am I training for?
+**1. Goals — one or several races, plus performance goals**
+- Ask for **every** race I want to do (it can be one or several, in different sports, on different dates). For each race:
   - **Triathlon:** Sprint (750 m / 20 km / 5 km), Olympic (1.5 / 40 / 10), Middle / 70.3 (1.9 / 90 / 21.1), Full / Ironman (3.8 / 180 / 42.2).
   - **Running:** exact distance in km (5 k, 10 k, half, marathon, or any custom/ultra distance, e.g. 98.6 km), road or trail, elevation gain.
-  - **Cycling:** exact distance in km **and** elevation gain in metres (e.g. a Stoneman), road / gravel / MTB.
+  - **Cycling:** exact distance in km **and** elevation gain in metres, road / gravel / MTB; one day or several stages.
+  - **Stoneman Miriquidi (Saxony/Czechia):** MTB (162 km, 4,400 m) or Road (290 km, 4,900 m); level Gold (1 day), Silver (2 days) or Bronze (3 days).
   - **Swimming:** distance in metres, pool or open water, wetsuit or not.
-- Race name, **race date**, goal (just finish / target time), and any secondary races before it.
+  - Race name, **date**, and goal (just finish / target time).
+- **Performance goals without a race**, each with a **target date**, e.g. "indoor FTP 200 W by 2027-04-01", "run threshold 4:45/km by 2027-05-01", "easy pace 6:00/km by …", "swim CSS 1:50/100m by …".
+- If I sign up for a new race later, I will come back with this prompt and my current plan — then rebuild the plan from that day on with **all** races.
 
 **2. Current fitness**
 - Recent results (races, time trials) with dates.
@@ -227,7 +238,14 @@ Before building, show a compact **athlete profile** and ask me to confirm or cor
 
 ## Phase 3 — Plan design rules
 
-- **Start** on the next Monday; **end** on race day. Every week until race day.
+**Several races:**
+- Judge how hard each race is **for me right now** (distance and climbing vs. my current longest sessions and fitness in that discipline, and my target time). Races of **similar difficulty are equally important** — each gets a full build, peak and taper. A race that is **clearly easier** for me is a secondary race: a short taper (4–7 days) and quick return to training. Tell me which race you treat as main and why.
+- Blend the disciplines: the closer and harder a race, the more the training shifts toward its discipline (e.g. more long, hilly rides before a Stoneman; more long runs before a marathon) — without losing the other disciplines.
+- **Taper before every race** (scaled to its length and importance) and plan **recovery after every race**: easy days, no intensity, then a gradual return (roughly a few days after a short race, 1–3 weeks after a marathon / Ironman / Stoneman Gold).
+- If two hard races are too close for full recovery and taper, tell me and suggest how to handle it.
+- Performance goals: include sessions and a short test (e.g. FTP / threshold / CSS test) shortly before each goal date.
+
+- **Start** on the next Monday; **end** on the date of my **last** race. Every week until then.
 - **Periodisation:** base → build → peak → taper (2–3 weeks, volume −30 to −50 %, keep some intensity) → race week.
 - Every **3rd or 4th week is a recovery week** (≈ −30 % volume).
 - Increase weekly volume by **≤ 10 %** per week; long sessions grow gradually toward goal-specific peaks (e.g. Ironman: long ride 5–6 h, long run 2.5–3 h with run/walk; marathon: 30–35 km; swim: continuous distance ≥ race distance).
@@ -256,7 +274,9 @@ At the very end output the **entire plan** as JSON in **one** \`\`\`json code bl
 
 - Valid JSON only: double quotes, no comments, no trailing commas, no "..." placeholders.
 - Dates ISO \`YYYY-MM-DD\`. Weeks start on **Monday**. **Every week has all 7 days**; a rest day has \`"sessions": []\`.
-- \`goal.type\`: \`"triathlon" | "run" | "bike" | "swim"\`; \`goal.distance\`: triathlon \`"sprint" | "olympic" | "70.3" | "full"\`, run = km as a number (e.g. 98.6), bike = km as a number plus \`goal.elevationM\`, swim = metres as a number.
+- \`races\`: **one entry per race** (also when there is only one): \`name\`, \`date\`, \`type\` (\`"triathlon" | "run" | "bike" | "swim" | "stoneman-mtb" | "stoneman-road"\`), \`distance\` (triathlon \`"sprint" | "olympic" | "70.3" | "full"\`; run/bike = km as a number, e.g. 98.6; swim = metres), \`elevationM\` (run/bike), \`surface\` (bike: \`"road" | "gravel" | "mtb"\`), \`level\` (Stoneman: \`"gold" | "silver" | "bronze"\`), \`goalTime\` (\`"h:mm"\`, optional).
+- \`performanceGoals\` (optional): \`{ "metric": "ftp" | "runThreshold" | "easy" | "css", "target": 200 or "4:45", "date": "YYYY-MM-DD" }\` — FTP in watts, paces as \`"m:ss"\` (run per km, CSS per 100 m).
+- \`goal\`: the main race again in the old format (\`type\`, \`distance\`, \`raceName\`, \`raceDate\`, \`goalTime\`) — kept for compatibility.
 - \`sport\`: \`"swim" | "bike" | "run" | "strength"\`.
 - \`steps[].type\`: \`"warmup" | "work" | "recovery" | "cooldown" | "steady" | "drill" | "walk"\`.
 - Each step has **either** \`durationMin\` (number, minutes; decimals allowed, e.g. 0.5 = 30 s) **or** \`distanceM\` (swim sets), plus \`zone\` (1–5) and \`text\`.
@@ -276,6 +296,12 @@ Example (one week shortened to two days — the real export must contain all wee
   "format": "${FORMAT}",
   "name": "70.3 Lake Race 2027 — Anna",
   "goal": { "type": "triathlon", "distance": "70.3", "raceName": "Lake Race 70.3", "raceDate": "2027-06-20", "goalTime": "5:45" },
+  "races": [
+    { "name": "City Marathon", "date": "2027-04-11", "type": "run", "distance": 42.195, "elevationM": 120, "goalTime": "3:59" },
+    { "name": "Lake Race 70.3", "date": "2027-06-20", "type": "triathlon", "distance": "70.3", "goalTime": "5:45" },
+    { "name": "Stoneman Miriquidi Road", "date": "2027-08-14", "type": "stoneman-road", "level": "silver" }
+  ],
+  "performanceGoals": [ { "metric": "ftp", "target": 220, "date": "2027-03-01" }, { "metric": "css", "target": "1:45", "date": "2027-05-15" } ],
   "athlete": { "ftpIndoorW": 210, "ftpOutdoorW": 225, "runThresholdPace": "4:55", "cssPer100m": "1:45", "lthr": 172, "maxHr": 190, "hrZonesBpm": [138, 152, 162, 172, 190] },
   "weeks": [
     {

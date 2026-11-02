@@ -36,6 +36,7 @@ export function baseline(acts, s) {
     out.notes.bike = 'no long outdoor rides yet — assumed 27 km/h';
   }
   out.bikeLongestKm = longest;
+  out.longestSessionH = round(Math.max(1, ...since(acts, 70).filter(a => ['run', 'bike', 'swim'].includes(a.sport)).map(a => a.movingSec / 3600)), 2);   // longest session of any sport (10 wk)
   // run — easy pace at Z2 HR, longest continuous run
   const eps = easyPaceSeries(acts, 42).slice(-8).map(p => p.y);
   const runs = since(acts, 42).filter(a => a.sport === 'run' && (a.gapSecKm || a.paceSecKm) && a.movingSec >= 1500);
@@ -67,7 +68,7 @@ export function predict(b, s, d = {}) {
   }
   // bike
   const ftp0 = s.ftp, ftp1 = Math.max(60, s.ftp + (d.ftp || 0));
-  let kmh = b.bikeKmh * Math.pow(ftp1 / ftp0, 1 / 3) * 1.02, bikeSec = 0;
+  let kmh = b.bikeKmh * Math.pow(ftp1 / ftp0, 1 / 3) * 1.02 * ({ gravel: 0.85, mtb: 0.62 }[D.surface] || 1), bikeSec = 0;   // off-road surfaces are slower
   if (D.bike) {
     if (b.bikeLongestKm && b.bikeLongestKm < D.bike) kmh *= 1 - 0.03 * Math.log2(D.bike / Math.max(60, b.bikeLongestKm));
     bikeSec = D.bike / kmh * 3600 + (D.hm || 0) / 700 * 3600 * 0.45;    // climbing: ~700 m/h VAM, part of it already in the speed
@@ -82,6 +83,7 @@ export function predict(b, s, d = {}) {
       runPace = thr * f; walkPace = Math.max(runPace * 1.35, easy * 1.3);
     } else { runPace = easy * 1.06 * 1.03; walkPace = easy * 1.35; }   // off the bike + drift; run/walk beyond the limit
     runSec = Math.min(runCont, D.run) * runPace + Math.max(0, D.run - runCont) * walkPace;
+    if (D.runHm) runSec *= (D.run + D.runHm / 100) / D.run;          // trail: 100 m of climbing ≈ 1 flat km of effort
   }
   const trans = (D.trans || 0) * 60;
   return {

@@ -498,3 +498,7 @@ textarea.paste, .filein { width: 100%; background: var(--card-2); border: 1px so
 .help-sec p{margin:0;font-size:14px;line-height:1.55;color:var(--text)}
 .help-x{position:absolute;top:10px;right:12px;background:none;border:0;color:var(--muted);font-size:24px;cursor:pointer}
 @keyframes fadein{from{opacity:0}}
+
+.race-row{border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:12px;background:rgba(255,255,255,.02)}
+.race-chips{flex-wrap:wrap}
+.race-chips .chip .faint{font-weight:500}

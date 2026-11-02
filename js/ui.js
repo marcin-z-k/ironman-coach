@@ -6,6 +6,7 @@ import { renderWidgets } from './health.js';
 import { readiness, recoveryHours, sleepCoach, recoveryTips, fmtH } from './recovery.js';
 import { availableCategories, secondaryPredictions, CAT_LABEL, fmtRace } from './predictors.js';
 import { singleFtp, TRAINERS } from './virtualpower.js';
+import { upcomingRaces, primaryRace, priorities, sFor, predictRace, raceLabel, perfGoalFor, RACE_TYPES, STONEMAN, LEVEL_DAYS, typeKey, fmtGoalTime, parseGoalTime, goalOf } from './races.js';
 import { targets, progress, status, pathPts, LOWER_BETTER, KEYS as TG_KEYS } from './targets.js';
 import { hrRangeStr, hrZoneOf, plannedDist, getZoneModel } from './zones.js';
 import { estimateAll, estimateTrend } from './thresholds.js';
@@ -30,14 +31,16 @@ export function renderToday(A, ui) {
   const weekStart = isoDate(startOfWeek(parseDate(sel)));
   const week = A.plan.weeks.find(w => w.start === weekStart);
   const s = load();
-  const daysLeft = daysBetween(today(), s.raceDate);
+  const nextRace = upcomingRaces(s)[0];
+  const daysLeft = daysBetween(today(), nextRace ? nextRace.date : s.raceDate);
   root.append(h(`<div class="row between" style="padding:2px 4px">
-    <div><div class="small muted">${esc(s.raceName)}</div><div style="font-weight:800;font-size:22px;letter-spacing:-.02em"><span data-count="${daysLeft}">${daysLeft}</span> days to go</div></div>
+    <div><div class="small muted">${esc(nextRace ? nextRace.name : s.raceName)}${upcomingRaces(s).length > 1 ? ` · next of ${upcomingRaces(s).length} races` : ''}</div><div style="font-weight:800;font-size:22px;letter-spacing:-.02em"><span data-count="${daysLeft}">${daysLeft}</span> days to go</div></div>
     ${week ? `<span class="pill accent">${PHASES[week.phase].label}${week.recovery ? ' · recovery' : ''} · wk ${week.index + 1}/${A.plan.totalWeeks + 1}</span>` : ''}
   </div>`));
 
   root.append(renderRings(A, ui, week));
   if (daysLeft >= 0 && daysLeft < 14) root.append(carbCard(s, daysLeft));
+  const prc = postRaceCard(A, s); if (prc) root.append(prc);
   root.append(renderWidgets(ui.data, ui));
   const rc = recoveryCard(ui.data); if (rc) root.append(rc);
 
@@ -372,16 +375,20 @@ function outdoorFtpNow(acts, s) { if (singleFtp(s)) return s.ftp; const rf = ftp
 function simulatorCard(A, ui, acts = []) {
   let s = load();
   const b = A.goal.base;
+  const races = upcomingRaces(s);
+  const cur = races.length ? (races.find(r => r.id === ui.simRace) || primaryRace(s, b)) : null;
+  const prios = races.length > 1 ? priorities(s, b) : {};
   const est = simEstimates(s, b, acts);
   if (!s.sim || !s.sim.raceFtp) s = save({ sim: { wetsuit: true, ...(s.sim || {}), ftp: est.ftp, outdoorFtp: true, raceFtp: true } });   // one-time switch to Race FTP   // one-time switch to outdoor FTP
   const d = { ...est, wetsuit: true, ...s.sim };        // stored user values win
   const ftpRef = est.ftp;                               // bike speed b.bikeKmh comes from outdoor rides = current outdoor FTP
   const persist = () => { save({ sim: { ...d } }); };
   const delta = () => ({ ftp: d.ftp - ftpRef, css: d.css - s.css, thr: d.thr - s.runThreshold, swimCont: d.swimCont, runCont: d.runCont, wetsuit: d.wetsuit });
-  const goal = (s.goalHours || 12) * 3600;
+  const goal = (cur ? (sFor(s, cur).goalHours || 0) : (s.goalHours || 12)) * 3600;
   const lo = (k, v) => Math.min(v, d[k]), hi = (k, v) => Math.max(v, d[k]);
   const card = h(`<div class="card hero sim">
-    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn small" data-est title="Replace all slider values with the current estimates (wetsuit stays as you set it)">Estimate</button></div>
+    <div class="row between"><div class="card-title" style="margin:0">Projected finish · ${cur ? (raceLabel(cur).toLowerCase().includes(cur.name.toLowerCase().split(' ')[0]) ? esc(raceLabel(cur)) : `${esc(cur.name)} · ${esc(raceLabel(cur))}`) : esc(goalLabel(s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null))}</div><button class="btn small" data-est title="Replace all slider values with the current estimates (wetsuit stays as you set it)">Estimate</button></div>
+    ${races.length > 1 ? `<div class="chips race-chips" style="margin-top:10px">${races.map(r => `<button class="chip ${r === cur ? 'on' : ''}" data-race="${esc(r.id)}">${esc(r.name)} <span class="faint">${fmtDate(r.date, { day: 'numeric', month: 'short' })}${prios[r.id] ? ' · ' + prios[r.id].prio : ''}</span></button>`).join('')}</div>${prios[cur.id] ? `<div class="small faint" style="margin-top:6px">Priority ${prios[cur.id].prio}: ${esc(prios[cur.id].reason)}</div>` : ''}` : ''}
     <div class="row between" style="margin-top:6px"><div class="big mono" data-o="total"></div><span class="pill" data-o="gap"></span></div>
     <div class="splitbar" data-o="bar"><span class="sw"></span><span class="bk"></span><span class="rn"></span><span class="tr"></span><i class="goal"></i></div>
     <div class="split" style="margin-top:12px">
@@ -394,8 +401,8 @@ function simulatorCard(A, ui, acts = []) {
       ${slider('ftp', singleFtp(s) ? 'Bike FTP' : 'Race FTP', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
       ${slider('css', 'Swim CSS', lo('css', est.css - 20), hi('css', est.css + 15), 1)}
       ${slider('thr', 'Run threshold', lo('thr', est.thr - 90), hi('thr', est.thr + 30), 1)}
-      ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim, d.swimCont), 100)}
-      ${slider('runCont', 'Continuous run', 3, Math.max(42.2, D0g(s).run, d.runCont), 0.2)}
+      ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(sFor(s, cur)).swim, d.swimCont), 100)}
+      ${slider('runCont', 'Continuous run', 3, Math.max(42.2, D0g(sFor(s, cur)).run, d.runCont), 0.2)}
       <label class="toggle"><input type="checkbox" data-k="wetsuit" ${d.wetsuit ? 'checked' : ''}> Wetsuit swim</label>
     </div>
     <div class="small muted" data-o="estnote" style="margin-top:8px"></div>
@@ -407,23 +414,23 @@ function simulatorCard(A, ui, acts = []) {
       <b>Transitions</b> 12 min.</div></details>
   </div>`);
   const out = k => card.querySelector(`[data-o="${k}"]`);
-  const D0 = predict(b, { ...s, ftp: ftpRef }, delta()).D;
+  const D0 = predictRace(b, { ...s, ftp: ftpRef }, cur, delta()).D;
   if (!D0.swim) { card.querySelector('[data-o="swim"]').closest('.metric').remove(); card.querySelector('[data-k="css"]').closest('.sl').remove(); card.querySelector('[data-k="swimCont"]').closest('.sl').remove(); card.querySelector('[data-k="wetsuit"]').closest('label').remove(); }
   if (!D0.bike) { card.querySelector('[data-o="bike"]').closest('.metric').remove(); card.querySelector('[data-k="ftp"]').closest('.sl').remove(); }
   if (!D0.run) { card.querySelector('[data-o="run"]').closest('.metric').remove(); card.querySelector('[data-k="thr"]').closest('.sl').remove(); card.querySelector('[data-k="runCont"]').closest('.sl').remove(); }
   if (!D0.trans) card.querySelector('[data-o="trans"]').closest('.metric').remove();
   const update = () => {
-    const p = predict(b, { ...s, ftp: ftpRef }, delta());
+    const p = predictRace(b, { ...s, ftp: ftpRef }, cur, delta());
     out('total').textContent = fmtSec(p.totalSec);
     const diff = p.totalSec - goal;
     out('total').className = 'big mono ' + (diff <= 0 ? 'sport-run' : 'sport-bike');
-    out('gap').textContent = diff <= 0 ? `${fmtSec(-diff)} under goal` : `${fmtSec(diff)} over goal`;
-    out('gap').className = 'pill ' + (diff <= 0 ? 'good' : 'warn');
+    out('gap').textContent = !goal ? (p.days > 1 ? `${p.days} days · ${fmtSec(p.perDaySec)} per day` : 'no target time') : diff <= 0 ? `${fmtSec(-diff)} under goal` : `${fmtSec(diff)} over goal`;
+    out('gap').className = 'pill ' + (!goal ? '' : diff <= 0 ? 'good' : 'warn');
     const set = (k, v) => { const e = out(k); if (e) e.textContent = v; };
     set('swim', fmtSec(p.swimSec));
     if (out('swimk')) out('swimk').textContent = `Swim · ${paceToStr(p.swim.effPace)}/100m avg${p.swim.cont < (p.D.swim || 3800) ? ` · ${Math.floor((p.D.swim || 3800) / p.swim.cont - 1)} stops` : ''}`;
     set('bike', fmtSec(p.bikeSec));
-    set('bikek', `Bike · ${p.bike.kmh} km/h${p.D.hm ? ` · ${p.D.hm} hm` : ''}`);
+    set('bikek', `Bike · ${p.bike.kmh} km/h${p.D.hm ? ` · ${p.D.hm} hm` : ''}${p.days > 1 ? ` · per day (${p.days} days)` : ''}`);
     set('run', fmtSec(p.runSec));
     if (out('runk')) out('runk').textContent = p.run.walkKm > 0 ? `Run ${round(p.run.runCont, 0)} km @ ${paceToStr(p.run.runPace)} + run/walk ${p.run.walkKm} km` : `Run · ${paceToStr(p.run.runPace)}/km`;
     set('trans', fmtSec(p.transSec));
@@ -432,7 +439,7 @@ function simulatorCard(A, ui, acts = []) {
     bar.querySelector('.bk').style.width = (p.bikeSec / tot * 100) + '%';
     bar.querySelector('.rn').style.width = (p.runSec / tot * 100) + '%';
     bar.querySelector('.tr').style.width = (p.transSec / tot * 100) + '%';
-    bar.querySelector('.goal').style.left = (goal / tot * 100) + '%';
+    bar.querySelector('.goal').style.left = (goal / tot * 100) + '%'; bar.querySelector('.goal').hidden = !goal;
     const lab = {
       ftp: `${d.ftp} W`,
       css: `${paceToStr(d.css)}/100m · pace ${paceToStr(b.swimPace + d.css - s.css)}`,
@@ -450,6 +457,7 @@ function simulatorCard(A, ui, acts = []) {
   };
   card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; inp.onchange = persist; });
   const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; persist(); update(); };
+  card.querySelectorAll('[data-race]').forEach(c => c.onclick = () => { ui.simRace = c.dataset.race; ui.keepScroll(); ui.rerender(); });
   card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b, acts), wetsuit: d.wetsuit, outdoorFtp: true, raceFtp: true } }); ui.keepScroll(); ui.rerender(); };   // wetsuit stays yours
   update();
   return card;
@@ -488,7 +496,7 @@ function pmcCard(A, data, ui) {
   const pts = k => past.map(w => ({ x: w.date, y: round(k === 'tsb' ? w.ctl - w.atl : w[k], 1) })).concat(fut.slice(1).map(f => ({ x: f.x, y: f[k] })));
   const chart = lineChart({
     height: 240, zero: true, today: A.todayIso,
-    markers: [{ x: s.raceDate, label: 'Race', color: '#ff6a3d' }],
+    markers: (upcomingRaces(s).length ? upcomingRaces(s).map(r => ({ x: r.date, label: r.name.length > 14 ? r.name.slice(0, 13) + '…' : r.name, color: '#ff6a3d' })) : [{ x: s.raceDate, label: 'Race', color: '#ff6a3d' }]),
     bands: [{ y0: -30, y1: -10, color: 'rgba(88,227,154,.06)', label: 'productive' }, { y0: 15, y1: 30, color: 'rgba(76,195,255,.07)', label: 'race-day target' }],
     series: [
       { name: 'Fitness (CTL)', color: '#4cc3ff', pts: pts('ctl'), futureFrom: last.date, area: true, width: 2.6 },
@@ -740,7 +748,9 @@ export function renderSettings(ui, onSave) {
       <button class="btn secondary" type="button" data-pa="import">⇪ Import plan (JSON from your AI)</button>
       <button class="btn secondary" type="button" data-pa="export">⤓ Export current plan (JSON)</button>
       <button class="btn ghost" type="button" data-pa="reset">↺ Reset to default plan</button>
+      <div class="hint">Signed up for another race, or want a performance goal (e.g. FTP by a date)? Download the prompt again, give your AI your current plan and all races — then import the new plan. Your activities, charts and statistics stay as they are; only the plan changes and every race gets its own projected finish and Race Day.</div>
     </div><div class="small faint" style="margin-top:12px">App version ${esc(window.APP_VERSION || 'dev')}</div></div>`));
+  root.querySelector('form').after(racesCard(s, ui));
   if (!s.demo) root.querySelector('form').after(h(`<div class="card"><div class="card-title">Devices</div>
     <div class="small muted" style="margin-bottom:10px">Settings, thresholds, simulator values, day moves and your custom plan are stored in your intervals.icu account (a hidden note on 1 Jan 2000), so every device signed in with this athlete shows the same values. Your API key never leaves this device.${s.syncedAt ? ` Last synced ${new Date(s.syncedAt).toLocaleString()}.` : ''}</div>
     <div class="stack" style="gap:8px">
@@ -874,7 +884,10 @@ function targetCards(data, ui) {
   const cards = [];
   const one = singleFtp(s);
   for (const k of TG_KEYS) {
-    const T = k === 'ftp' && one ? { ...TG.ftp, title: 'FTP' } : TG[k], t = tg[k];
+    const T = k === 'ftp' && one ? { ...TG.ftp, title: 'FTP' } : TG[k];
+    const pg = perfGoalFor(s, k);                                    // dated performance goal (Settings / imported plan)
+    const t = pg ? { target: pg.target, band: LOWER_BETTER[k] ? [pg.target - (k === 'css' ? 4 : 10), pg.target] : [pg.target, Math.round(pg.target * 1.03)] } : tg[k];
+    const endDate = pg ? pg.date : s.raceDate;
     let pts, roll = null, cur, extra = '', inUse = null;
     if (k === 'easy') {
       pts = easyPaceSeries(acts, 140).filter(p => p.x >= from);
@@ -892,11 +905,11 @@ function targetCards(data, ui) {
     }
     const b = base[k] || (pts.length ? { value: (roll || pts)[0].y, date: pts[0].x, provisional: true } : (cur != null && k !== 'easy' && s[k] ? { value: s[k], date: today, provisional: true } : null));
     const pct = b ? progress(k, cur, b.value, t.target) : null;
-    const st = b ? status(k, cur, b.value, b.date, t.target, s.raceDate, today) : null;
+    const st = b ? status(k, cur, b.value, b.date, t.target, endDate, today) : null;
     const card = h(`<div class="card tg-card" data-help-key="tg-${k}${k === 'ftp' && one ? '1' : ''}">
       <div class="row between"><div class="card-title sport-${T.sport}" style="margin:0">${T.title}</div>${st ? `<span class="pill ${st.cls}">${st.label}</span>` : `<span class="pill">${cur == null ? 'No data' : 'Calculating…'}</span>`}</div>
       <div class="tg-head">${goalRing(pct, T.color)}
-        <div class="tg-vals"><div><span class="k">Current</span><b style="color:${T.color}">${cur != null ? T.fmt(cur) : '–'}</b></div><div><span class="k">Target</span><b>${T.fmt(t.target)}</b></div>${st ? `<div><span class="k">Expected today</span><b class="muted">${T.fmt(st.exp)}</b></div>` : ''}</div></div>
+        <div class="tg-vals"><div><span class="k">Current</span><b style="color:${T.color}">${cur != null ? T.fmt(cur) : '–'}</b></div><div><span class="k">${pg ? `Goal by ${fmtDate(pg.date, { day: 'numeric', month: 'short' })}` : 'Target'}</span><b>${T.fmt(t.target)}</b></div>${st ? `<div><span class="k">Expected today</span><b class="muted">${T.fmt(st.exp)}</b></div>` : ''}</div></div>
       <div class="tg-chart"></div>
       <details class="more"><summary>Details</summary><div class="stack" style="gap:6px;margin-top:6px">${extra}</div></details>
     </div>`);
@@ -904,7 +917,7 @@ function targetCards(data, ui) {
       const series = [];
       if (roll) series.push({ name: 'Run', color: T.color + '88', pts, dots: true, width: 0.01, fmt: T.fmt }, { name: 'Current (5-run median)', color: T.color, pts: roll, width: 2.6, fmt: T.fmt });
       else series.push({ name: 'Estimate', color: T.color, pts, dots: true, fmt: T.fmt }, { name: 'In use', color: '#9aa3b2', pts: pts.map(p => ({ x: p.x, y: inUse })), dash: true, width: 1.2, fmt: T.fmt });
-      if (b) series.push({ name: 'Target path', color: '#e8ecf3', pts: pathPts(b.value, b.date, t.target, s.raceDate, pts[0].x, today), dash: true, width: 1.6, fmt: T.fmt });
+      if (b) series.push({ name: pg ? 'Path to your goal' : 'Target path', color: '#e8ecf3', pts: pathPts(b.value, b.date, t.target, endDate, pts[0].x, pg ? pg.date : today), dash: true, width: 1.6, fmt: T.fmt });
       card.querySelector('.tg-chart').append(lineChart({ height: 150, invert: LOWER_BETTER[k], today, yFmt: v => T.fmt(v).replace('/100m', '').replace('/km', ''), bands: [{ y0: t.band[0], y1: t.band[1], color: 'rgba(88,227,154,.09)', label: 'goal' }], series }));
     } else card.querySelector('.tg-chart').append(h(`<div class="muted small">${k === 'easy' ? 'Needs a few runs with heart rate.' : 'Needs a few activities.'}</div>`));
     cards.push(card);
@@ -934,4 +947,101 @@ function secondaryCard(A, ui, acts) {
   </div>`);
   card.querySelector('.pred-sel').onchange = (e) => { ui.predCat = e.target.value; ui.keepScroll(); ui.rerender(); };
   return card;
+}
+
+// ---- races & performance goals (Settings) -----------------------------------------------------
+const PG_METRICS = { ftp: ['Indoor FTP', 'W'], runThreshold: ['Run threshold', '/km'], easy: ['Easy pace', '/km'], css: ['Swim CSS', '/100m'] };
+function racesCard(s, ui) {
+  const races = (s.races || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const goals = (s.perfGoals || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const b = ui.A?.goal?.base;
+  const pr = b ? priorities(s, b) : {};
+  const card = h(`<div class="card" data-help-key="races"><div class="card-title">Races & performance goals</div>
+    ${!races.length && !goals.length ? '<div class="small muted">One race: set it in "Race & goal" above. Several races or goals with dates: import a plan made with the AI Coach prompt (Plans & sharing) — or add them here.</div>' : ''}
+    <div class="race-list stack" style="gap:10px;margin-top:8px"></div>
+    <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn secondary small" type="button" data-add-race>+ Race</button><button class="btn secondary small" type="button" data-add-goal>+ Performance goal</button></div>
+    <div class="goal-list stack" style="gap:10px;margin-top:12px"></div>
+    <button class="btn" type="button" data-save-races style="margin-top:12px">Save races & goals</button></div>`);
+  const rl = card.querySelector('.race-list'), gl = card.querySelector('.goal-list');
+  const raceRow = (r) => {
+    const tk = typeKey(r);
+    const row = h(`<div class="race-row" data-id="${esc(r.id)}">
+      <div class="row between"><b>${esc(r.name || 'New race')}</b>${pr[r.id] ? `<span class="pill ${pr[r.id].prio === 'A' ? 'accent' : ''}" title="${esc(pr[r.id].reason)}">Priority ${pr[r.id].prio}</span>` : r.date && r.date < isoDate(new Date()) ? '<span class="pill">done</span>' : ''}</div>
+      ${pr[r.id] ? `<div class="small faint">${esc(pr[r.id].reason)}</div>` : ''}
+      <div class="grid2" style="margin-top:6px">
+        <div class="field"><label>Name</label><input data-f="name" value="${esc(r.name || '')}"></div>
+        <div class="field"><label>Date</label><input data-f="date" type="date" value="${esc(r.date || '')}"></div>
+        <div class="field"><label>Type</label><select data-f="tk">${Object.entries(RACE_TYPES).map(([k, v]) => `<option value="${k}" ${k === tk ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="field r-dist"><label>Distance (km)</label><input data-f="km" type="number" step="any" value="${r.km ?? ''}"></div>
+        <div class="field r-swim"><label>Distance (m)</label><input data-f="m" type="number" step="50" value="${r.m ?? ''}"></div>
+        <div class="field r-hm"><label>Elevation (hm)</label><input data-f="hm" type="number" step="10" value="${r.hm ?? ''}"></div>
+        <div class="field r-surf"><label>Surface</label><select data-f="surface">${['road', 'gravel', 'mtb'].map(x => `<option ${r.surface === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="field r-days"><label>Stages (days)</label><input data-f="days" type="number" min="1" max="10" value="${r.days || 1}"></div>
+        <div class="field r-level"><label>Level</label><select data-f="level">${Object.entries(LEVEL_DAYS).map(([k, d]) => `<option value="${k}" ${(r.level || 'gold') === k ? 'selected' : ''}>${k[0].toUpperCase() + k.slice(1)} (${d} day${d > 1 ? 's' : ''})</option>`).join('')}</select></div>
+        <div class="field"><label>Target time (h:mm, optional)</label><input data-f="goalTime" value="${esc(fmtGoalTime(r.goalTime))}" placeholder="—"></div>
+      </div><button class="btn ghost small" type="button" data-del>Remove race</button></div>`);
+    const vis = () => { const t = row.querySelector('[data-f=tk]').value; const show = (c, on) => row.querySelector(c).hidden = !on;
+      show('.r-dist', t === 'run' || t === 'bike'); show('.r-swim', t === 'swim'); show('.r-hm', t === 'run' || t === 'bike'); show('.r-surf', t === 'bike'); show('.r-days', t === 'bike'); show('.r-level', t.startsWith('stoneman')); };
+    row.querySelector('[data-f=tk]').onchange = vis; vis();
+    row.querySelector('[data-del]').onclick = () => row.remove();
+    return row;
+  };
+  const goalRow = (g) => {
+    const fmtT = (m, v) => v == null ? '' : m === 'ftp' ? v : paceToStr(v);
+    const row = h(`<div class="race-row goal-row"><div class="grid2">
+      <div class="field"><label>Performance goal</label><select data-f="metric">${Object.entries(PG_METRICS).map(([k, v]) => `<option value="${k}" ${g.metric === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></div>
+      <div class="field"><label>Target (W or m:ss)</label><input data-f="target" value="${esc(String(fmtT(g.metric, g.target)))}" placeholder="200 / 4:45"></div>
+      <div class="field"><label>By date</label><input data-f="date" type="date" value="${esc(g.date || '')}"></div>
+    </div><button class="btn ghost small" type="button" data-del>Remove goal</button></div>`);
+    row.querySelector('[data-del]').onclick = () => row.remove();
+    return row;
+  };
+  races.forEach(r => rl.append(raceRow(r)));
+  goals.forEach(g => gl.append(goalRow(g)));
+  card.querySelector('[data-add-race]').onclick = () => rl.append(raceRow({ id: 'r' + Date.now(), type: 'run', km: 42.195, date: isoDate(addDays(new Date(), 90)) }));
+  card.querySelector('[data-add-goal]').onclick = () => gl.append(goalRow({ metric: 'ftp', date: isoDate(addDays(new Date(), 90)) }));
+  card.querySelector('[data-save-races]').onclick = () => {
+    const out = [];
+    for (const row of rl.querySelectorAll('.race-row')) {
+      const v = k => row.querySelector(`[data-f=${k}]`)?.value;
+      const tk = v('tk'); if (!v('date')) continue;
+      const r = { id: row.dataset.id, name: v('name') || RACE_TYPES[tk], date: v('date'), goalTime: parseGoalTime(v('goalTime')) };
+      if (tk.startsWith('tri-')) Object.assign(r, { type: 'triathlon', tri: tk.slice(4) });
+      else if (tk.startsWith('stoneman')) Object.assign(r, { type: tk, level: v('level') });
+      else if (tk === 'swim') Object.assign(r, { type: 'swim', m: +v('m') || 3800 });
+      else if (tk === 'run') Object.assign(r, { type: 'run', km: +v('km') || 42.195, hm: +v('hm') || 0 });
+      else Object.assign(r, { type: 'bike', km: +v('km') || 100, hm: +v('hm') || 0, surface: v('surface'), days: +v('days') || 1 });
+      out.push(r);
+    }
+    const gs = [];
+    for (const row of gl.querySelectorAll('.goal-row')) {
+      const m = row.querySelector('[data-f=metric]').value, t = row.querySelector('[data-f=target]').value.trim(), d = row.querySelector('[data-f=date]').value;
+      const val = m === 'ftp' ? +t : strToPace(t);
+      if (val && d) gs.push({ id: 'g' + d + m, metric: m, target: val, date: d });
+    }
+    const patch = { races: out, perfGoals: gs };
+    const last = out.slice().sort((a, b) => a.date.localeCompare(b.date)).pop();
+    if (last) Object.assign(patch, { raceDate: last.date, raceName: last.name });
+    save(patch); ui.toast('Races & goals saved'); ui.invalidate();
+  };
+  return card;
+}
+
+// ---- after a race: recovery window -------------------------------------------------------------
+// recovery days ≈ 2 + 1.2 × race hours (10 k ≈ 3 · marathon ≈ 7 · Ironman ≈ 17), max 21
+function postRaceCard(A, s) {
+  const t = isoDate(new Date());
+  const past = (s.races || []).filter(r => r.date <= t).sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (!past) return null;
+  let hrs = 3; try { hrs = predictRace(A.goal.base, s, past).totalSec / 3600; } catch {}
+  const days = Math.min(21, Math.round(2 + 1.2 * hrs));
+  const d = daysBetween(past.date, t);
+  if (d < 0 || d >= days) return null;
+  const phase = d < Math.ceil(days * 0.3) ? ['Rest & repair', 'Walks, easy spin or swim only. Eat plenty of protein and carbs, sleep long. No running yet after long races.']
+    : d < Math.ceil(days * 0.7) ? ['Easy movement', 'Short sessions in zone 1–2 only, no intervals. Let soreness go before adding volume.']
+    : ['Gradual return', 'Normal easy volume; first short intensity again only if legs feel fresh and resting HR / HRV are back to baseline.'];
+  return h(`<div class="card hero" data-help-key="postrace"><div class="row between"><div class="card-title" style="margin:0">Recovery after ${esc(past.name)}</div><span class="pill accent">day ${d + 1} of ${days}</span></div>
+    <div class="progress glow" style="margin-top:10px"><span style="width:${Math.round((d + 1) / days * 100)}%"></span></div>
+    <div style="margin-top:10px"><b>${phase[0]}</b> <span class="small muted">${phase[1]}</span></div>
+    <div class="small faint" style="margin-top:6px">${days} recovery days for about ${Math.round(hrs * 10) / 10} h of racing. Your plan's next race build starts after this window.</div></div>`);
 }

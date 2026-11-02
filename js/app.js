@@ -13,6 +13,7 @@ import { aiCoachPrompt, importPlan, exportPlan, goalFromMeta } from './custompla
 import { setCache, getCache, setOnChange } from './store.js';
 import { syncSettings, schedulePush } from './sync.js';
 import { computeBaseline } from './targets.js';
+import { goalOf as goalOfRace } from './races.js';
 import { renderRaceDay, raceLocked } from './raceui.js';
 import { attachHelp } from './help.js';
 import { hasRealPower, singleFtp, calibrate } from './virtualpower.js';
@@ -70,7 +71,7 @@ function planAction(kind) {
   if (kind === 'export') { if (!A) compute(); download(new Blob([JSON.stringify(exportPlan(A.plan, s, s.planSource === 'custom' ? (s.customName || 'Imported plan') : `${s.raceName} plan`), null, 1)], { type: 'application/json' }), `ironman-coach-plan-${isoDate(new Date())}.json`); return; }
   if (kind === 'reset') {
     if (!ui.confirm('Switch back to the default plan? Imported plan and goal selection are cleared (your default plan was never changed).')) return;
-    setCache('customPlan', null); save({ planSource: 'default', customName: null, moves: {} }); A = null; toast('Back to the default plan'); setTab('today'); return;
+    setCache('customPlan', null); save({ planSource: 'default', customName: null, moves: {}, races: [], perfGoals: [] }); A = null; toast('Back to the default plan'); setTab('today'); return;
   }
   if (kind === 'import') {
     const node = el(`<div class="detail"><div class="detail-head"><button class="icon-btn" data-close>✕</button><div class="detail-title">Import a training plan</div></div>
@@ -91,11 +92,15 @@ function planAction(kind) {
       const list = (arr) => arr.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join('') + (arr.length > 12 ? `<li>…and ${arr.length - 12} more</li>` : '');
       if (!r.plan || !r.meta?.sessions) { out.innerHTML = `<div class="adjust-banner bad"><span>!</span><div><b>Could not import.</b><ul>${list(r.errors)}</ul></div></div>`; return; }
       const docs = texts;
-      out.innerHTML = `<div class="adjust-banner ${r.errors.length ? '' : 'good'}"><span>${r.errors.length ? '!' : '✓'}</span><div><b>${esc(r.meta.name || 'Plan')}</b>: ${r.meta.weeks} weeks, ${r.meta.sessions} sessions, race ${esc(r.plan.raceDate)}.${r.errors.length ? `<br>${r.errors.length} problem(s) — those sessions are skipped:<ul>${list(r.errors)}</ul>` : ''}${r.warnings.length ? `<ul>${list(r.warnings)}</ul>` : ''}</div></div><button class="btn" data-use style="margin-top:10px">Use this plan</button>`;
+      out.innerHTML = `<div class="adjust-banner ${r.errors.length ? '' : 'good'}"><span>${r.errors.length ? '!' : '✓'}</span><div><b>${esc(r.meta.name || 'Plan')}</b>: ${r.meta.weeks} weeks, ${r.meta.sessions} sessions, ${(r.meta.races || []).length > 1 ? `${r.meta.races.length} races: ${r.meta.races.map(x => esc(x.name) + ' ' + esc(x.date)).join(', ')}` : `race ${esc(r.plan.raceDate)}`}${r.meta.perfGoals?.length ? ` · ${r.meta.perfGoals.length} performance goal(s)` : ''}.${r.errors.length ? `<br>${r.errors.length} problem(s) — those sessions are skipped:<ul>${list(r.errors)}</ul>` : ''}${r.warnings.length ? `<ul>${list(r.warnings)}</ul>` : ''}</div></div><button class="btn" data-use style="margin-top:10px">Use this plan</button>`;
       out.querySelector('[data-use]').onclick = () => {
         setCache('customPlan', docs);
         const g = goalFromMeta(r.meta.goal);
-        save({ planSource: 'custom', customName: r.meta.name || 'Imported plan', raceDate: r.plan.raceDate, ...(r.meta.goal?.raceName ? { raceName: r.meta.goal.raceName } : {}), ...(g ? { goal: g } : {}), moves: {} });
+        const races = r.meta.races || [], last = races.slice().sort((a, b) => a.date.localeCompare(b.date)).pop();
+        // races + performance goals from the plan; your activities, charts and statistics are untouched
+        save({ planSource: 'custom', customName: r.meta.name || 'Imported plan', raceDate: r.plan.raceDate, ...(r.meta.goal?.raceName ? { raceName: r.meta.goal.raceName } : {}), ...(g ? { goal: g } : {}),
+          ...(last ? { raceName: last.name, goal: goalOfRace(last), ...(last.goalTime ? { goalHours: Math.round(last.goalTime / 360) / 10 } : {}) } : {}),
+          races, perfGoals: r.meta.perfGoals || [], moves: {} });
         A = null; closeSheet(); toast('Plan imported'); setTab('plan');
       };
     };
@@ -188,7 +193,7 @@ function render() {
     node = renderSetup(() => { save({ demo: true }); sync(); }, (id, key) => { save({ athleteId: id, apiKey: key, demo: false }); toast('Connecting…'); sync(true); });
   } else {
     if (!A) compute();
-    ui.data = data;
+    ui.data = data; ui.A = A;
     switch (ui.tab) {
       case 'plan': node = renderPlan(A, ui); break;
       case 'activities': node = renderActivities(A, ui, data); break;

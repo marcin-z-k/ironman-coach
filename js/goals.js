@@ -28,8 +28,8 @@ export function goalLabel(g) {
 export function raceDistances(s) {
   const g = s.planSource === 'goal' || s.planSource === 'custom' ? s.goal : null;
   if (!g || g.type === 'triathlon') { const t = TRI[g?.tri || 'full']; return { swim: t.swim, bike: t.bike, run: t.run, hm: 0, trans: t.trans, tri: true }; }
-  if (g.type === 'run') return { swim: 0, bike: 0, run: +g.runKm || 42.195, hm: 0, trans: 0, fresh: true };
-  if (g.type === 'bike') return { swim: 0, bike: +g.bikeKm || 100, run: 0, hm: +g.bikeHm || 0, trans: 0 };
+  if (g.type === 'run') return { swim: 0, bike: 0, run: +g.runKm || 42.195, hm: 0, runHm: +g.runHm || 0, trans: 0, fresh: true };
+  if (g.type === 'bike') return { swim: 0, bike: +g.bikeKm || 100, run: 0, hm: +g.bikeHm || 0, surface: g.surface || 'road', trans: 0 };
   if (g.type === 'swim') return { swim: +g.swimM || 3800, bike: 0, run: 0, hm: 0, trans: 0 };
   return { swim: 3800, bike: 180, run: 42.2, hm: 0, trans: 12, tri: true };
 }

@@ -2,27 +2,43 @@
 import { el, esc, fmtSec, paceToStr, fmtDate, daysBetween, today, round } from './util.js';
 import { load, save } from './store.js';
 import { raceDayPlan, exportRaceFit } from './raceday.js';
+import { upcomingRaces, sFor, raceLabel, goalOf } from './races.js';
 
 const h = (x) => el(x);
-export const raceLocked = (s = load()) => !s.raceDayForce && daysBetween(today(), s.raceDate) > 14;
+// a race unlocks 2 weeks before its date; the tab unlocks when ANY upcoming race is that close
+export const raceLocked = (s = load(), race = null) => {
+  if (s.raceDayForce) return false;
+  if (race) return daysBetween(today(), race.date) > 14;
+  const list = upcomingRaces(s);
+  return list.length ? list.every(r => daysBetween(today(), r.date) > 14) : daysBetween(today(), s.raceDate) > 14;
+};
 
 const COL = { gel: '#ff6a3d', salt: '#e8ecf3', drink: '#4cc3ff' };
 
 export function renderRaceDay(A, ui, data) {
-  const s = load();
+  const s0 = load();
   const acts = data?.activities || [];
-  const locked = raceLocked(s);
+  const races = upcomingRaces(s0);
+  const cur = races.length ? (races.find(r => r.id === ui.raceSel) || races[0]) : null;
+  const s = cur ? sFor(s0, cur) : s0;
+  const locked = raceLocked(s0, cur);
   const days = daysBetween(today(), s.raceDate);
   const plan = raceDayPlan(A, s, acts);
+  const mdays = cur ? (goalOf(cur).days || 1) : 1;
   const root = h(`<div class="stack race ${locked ? 'race-locked' : ''}" style="gap:12px"></div>`);
+  if (races.length > 1) {
+    const ch = h(`<div class="chips race-chips">${races.map(r => `<button class="chip ${r === cur ? 'on' : ''}" data-race="${esc(r.id)}">${raceLocked(s0, r) ? '🔒 ' : ''}${esc(r.name)} <span class="faint">${fmtDate(r.date, { day: 'numeric', month: 'short' })}</span></button>`).join('')}</div>`);
+    ch.querySelectorAll('[data-race]').forEach(b => b.onclick = () => { ui.raceSel = b.dataset.race; ui.keepScroll(); ui.rerender(); });
+    root.append(ch);
+  }
   if (locked) root.append(h(`<div class="adjust-banner"><span>🔒</span><div><strong>Race Day unlocks on ${fmtDate(new Date(new Date(s.raceDate) - 14 * 864e5).toISOString().slice(0, 10), { day: 'numeric', month: 'long' })}</strong> — 2 weeks before ${esc(s.raceName)}. This is a preview based on your current fitness; it updates until race week.</div></div>`));
   const wrap = h('<div class="stack" style="gap:12px"></div>');
   root.append(wrap);
 
   const legs = plan.legs;
   wrap.append(h(`<div class="card hero" data-help-key="race-summary">
-    <div class="row between"><div class="card-title" style="margin:0">${esc(s.raceName)} · ${fmtDate(s.raceDate, { day: 'numeric', month: 'short', year: 'numeric' })}</div><span class="pill">${days > 0 ? days + ' days' : days === 0 ? 'Today!' : 'done'}</span></div>
-    <div class="big mono" style="margin-top:8px">${fmtSec(plan.total)}</div>
+    <div class="row between"><div class="card-title" style="margin:0">${esc(s.raceName)} · ${fmtDate(s.raceDate, { day: 'numeric', month: 'short', year: 'numeric' })}${cur ? ` · ${esc(raceLabel(cur))}` : ''}</div><span class="pill">${days > 0 ? days + ' days' : days === 0 ? 'Today!' : 'done'}</span></div>
+    <div class="big mono" style="margin-top:8px">${fmtSec(plan.total * mdays)}</div>${mdays > 1 ? `<div class="small muted">${mdays} days · ${fmtSec(plan.total)} riding per day — pacing and fueling below are per day</div>` : ''}
     <div class="small muted">Realistic execution plan from your current fitness — pace to finish strong, not to chase the clock.</div>
     <div class="split" style="margin-top:12px">
       ${legs.swim ? `<div class="metric"><div class="v sport-swim">${fmtSec(legs.swim.sec)}</div><div class="k">Swim · ${paceToStr(legs.swim.pace)}/100m</div></div>` : ''}
