@@ -700,7 +700,7 @@ export function renderSettings(ui, onSave) {
       <div class="grid2">
         <div class="field"><label>Run threshold pace (min/km)</label><input name="runThreshold" value="${paceToStr(s.runThreshold)}" placeholder="5:40"></div>
         <div class="field"><label>Swim CSS (min/100m)</label><input name="css" value="${paceToStr(s.css)}" placeholder="1:50"></div>
-        <div class="field"><label>CSS target (min/100m)</label><input name="cssTarget" value="${paceToStr(s.cssTarget || 120)}" placeholder="2:00"><div class="hint">Goal for the Swim CSS ring and status (default 2:00 = Ironman swim pace).</div></div>
+        <div class="field"><label>Goal swim CSS pace (min/100m)</label><input name="cssTarget" value="${paceToStr(s.cssTarget || 120)}" placeholder="2:00"><div class="hint">Target pace on the Swim CSS chart, ring and status on Progress (default 2:00 = Ironman swim pace). A dated CSS performance goal (Races & performance goals) takes priority until its date.</div></div>
         <div class="field"><label>Longest swim without stopping (m)</label><input name="swimContinuous" type="number" min="50" max="10000" step="50" value="${s.swimContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Longest run without walking (km)</label><input name="runContinuous" type="number" min="1" max="42.2" step="0.5" value="${s.runContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Weight (kg)</label><input name="weightKg" type="number" min="40" max="150" value="${s.weightKg}"></div>
