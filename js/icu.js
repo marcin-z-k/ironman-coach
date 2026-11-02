@@ -40,7 +40,7 @@ export async function fetchAll({ days = 150, wellnessDays = 200 } = {}) {
 
   if (s.demo) {
     const data = { athlete: demoAthlete(),
-      activities: demoActivities(days).map(normalizeActivity).filter(Boolean).sort((a, b) => b.start.localeCompare(a.start)),
+      activities: demoActivities(days).map(normalizeActivity).filter(Boolean).map(a => s.demoNoPower && a.sport === 'bike' ? { ...a, avgW: null, np: null, deviceWatts: null, eftp: null } : a).sort((a, b) => b.start.localeCompare(a.start)),
       wellness: demoWellness(wellnessDays).map(normalizeWellness), fetchedAt: Date.now(), demo: true };
     setCache('data', data);
     return data;

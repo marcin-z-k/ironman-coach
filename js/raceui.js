@@ -38,7 +38,7 @@ export function renderRaceDay(A, ui, data) {
   const pace = h(`<div class="card" data-help-key="race-pacing"><div class="card-title">Pacing strategy</div><div class="stack" style="gap:12px"></div></div>`);
   const pc = pace.querySelector('.stack');
   if (legs.swim) pc.append(h(`<div><b class="sport-swim">Swim</b> <span class="muted small">${paceToStr(legs.swim.pace)}/100m</span><div class="small muted">${esc(legs.swim.note)}</div></div>`));
-  if (legs.bike) pc.append(h(`<div><b class="sport-bike">Bike</b> <span class="muted small">${legs.bike.P} W target (${Math.round(legs.bike.IF * 100)} % of ${legs.bike.ftp} W outdoor FTP)${legs.bike.hrCap ? ` · HR cap ${legs.bike.hrCap} bpm` : ''}</span>
+  if (legs.bike) pc.append(h(`<div><b class="sport-bike">Bike</b> <span class="muted small">${legs.bike.P} W target (${Math.round(legs.bike.IF * 100)} % of ${legs.bike.ftp} W ${legs.bike.ftpLabel || 'outdoor FTP'})${legs.bike.hrCap ? ` · HR cap ${legs.bike.hrCap} bpm` : ''}</span>
     ${legs.bike.segs.map(x => `<div class="seg-row"><span class="mono">${round(x.from)}–${round(x.to)} km</span><b>${x.w} W</b><span class="muted small">${esc(x.label)}</span></div>`).join('')}</div>`));
   if (legs.run) pc.append(h(`<div><b class="sport-run">Run</b>${legs.run.hrCap ? ` <span class="muted small">HR cap ${legs.run.hrCap} bpm for the first half</span>` : ''}
     ${legs.run.segs.map(x => `<div class="seg-row"><span class="mono">${round(x.from, 1)}–${round(x.to, 1)} km</span><b>${paceToStr(x.pace)}/km</b><span class="muted small">${esc(x.label)}</span></div>`).join('')}</div>`));

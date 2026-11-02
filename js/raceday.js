@@ -38,6 +38,7 @@ export function raceDayPlan(A, s, acts) {
   // ---- bike
   if (D.bike) {
     const ftp = (s.outdoorPower && s.ftpOutdoor) || ftpCoupling(acts, s).outdoorNow || s.ftpOutdoor || Math.round(s.ftp * 1.1);
+    const ftpLabel = ftpCoupling(acts, s).single ? 'FTP' : 'outdoor FTP';
     const hrs = p.bikeSec / 3600;
     const IF = clamp(0.95 * 0.97 * Math.pow(Math.max(0.5, hrs), -0.17), 0.6, 0.9);
     const P = ftp * IF, kmh = D.bike / hrs, z2 = hrZone2();
@@ -48,7 +49,7 @@ export function raceDayPlan(A, s, acts) {
       { from: s3, to: D.bike, w: Math.round(P * 0.97), label: 'Spin a little easier, prepare legs for the run' },
     ].filter(x => x.to > x.from);
     const fuel = fuelEvents('bike', hrs * 60, kmh, { carbsH: mid(GUT.bike.to), fluidH: 600, naH: 600, gel, gelNa, btlMl, btlC, btlNa, cap, sup, aidKm: 20, dist: D.bike });
-    out.legs.bike = { sec: p.bikeSec, kmh, ftp, IF, P: Math.round(P), hrCap: z2 ? z2[1] : null, segs, ...fuel };
+    out.legs.bike = { sec: p.bikeSec, kmh, ftp, ftpLabel, IF, P: Math.round(P), hrCap: z2 ? z2[1] : null, segs, ...fuel };
   }
 
   // ---- run

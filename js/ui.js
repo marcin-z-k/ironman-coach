@@ -5,6 +5,7 @@ import { summarise, getSummary, ruleSummary } from './analysis.js';
 import { renderWidgets } from './health.js';
 import { readiness, recoveryHours, sleepCoach, recoveryTips, fmtH } from './recovery.js';
 import { availableCategories, secondaryPredictions, CAT_LABEL, fmtRace } from './predictors.js';
+import { singleFtp, TRAINERS } from './virtualpower.js';
 import { targets, progress, status, pathPts, LOWER_BETTER, KEYS as TG_KEYS } from './targets.js';
 import { hrRangeStr, hrZoneOf, plannedDist, getZoneModel } from './zones.js';
 import { estimateAll, estimateTrend } from './thresholds.js';
@@ -41,7 +42,7 @@ export function renderToday(A, ui) {
   const rc = recoveryCard(ui.data); if (rc) root.append(rc);
 
   if (ui.pending?.length) {
-    const lbl = { ftp: 'Indoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
+    const lbl = { ftp: singleFtp(s) ? 'FTP' : 'Indoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
     const f = (k, v) => k === 'ftp' ? v + ' W' : paceToStr(v) + (k === 'css' ? '/100m' : '/km');
     const b = h(`<div class="adjust-banner good"><span>↗</span><div style="flex:1"><strong>New threshold estimate from your activities.</strong> ${ui.pending.map(u => `${lbl[u.field]} ${f(u.field, u.from)} → <b>${f(u.field, u.to)}</b>`).join(' · ')}<div style="margin-top:8px"><button class="btn small">Apply</button></div></div></div>`);
     b.querySelector('button').onclick = () => ui.applyPending();
@@ -352,7 +353,7 @@ export function renderProgress(A, ui, data) {
   root.append(pmcCard(A, data, ui));
   root.append(tizCard(acts, ui));
   root.append(splitCard(acts));
-  root.append(couplingCard(acts, ui));
+  if (!singleFtp(load())) root.append(couplingCard(acts, ui));
   root.append(volumeCard(A, data));
   const sp = secondaryCard(A, ui, acts); if (sp) root.append(sp);
   return root;
@@ -365,7 +366,7 @@ function simEstimates(s, b, acts) {
   return { ftp: outdoorFtpNow(acts, s), css: s.css, thr: s.runThreshold, swimCont: b.swimCont, runCont: round(b.runCont, 1), at: isoDate(new Date()) };
 }
 // The race bike course is outdoors → the simulator works with your OUTDOOR FTP.
-function outdoorFtpNow(acts, s) { if (s.outdoorPower && s.ftpOutdoor) return s.ftpOutdoor; const c = ftpCoupling(acts, s); return c.outdoorNow || s.ftpOutdoor || s.ftp; }
+function outdoorFtpNow(acts, s) { if (singleFtp(s)) return s.ftp; if (s.outdoorPower && s.ftpOutdoor) return s.ftpOutdoor; const c = ftpCoupling(acts, s); return c.outdoorNow || s.ftpOutdoor || s.ftp; }
 function simulatorCard(A, ui, acts = []) {
   let s = load();
   const b = A.goal.base;
@@ -388,7 +389,7 @@ function simulatorCard(A, ui, acts = []) {
       <div class="metric"><div class="v" data-o="trans"></div><div class="k">Transitions</div></div>
     </div>
     <div class="sliders">
-      ${slider('ftp', 'Bike FTP (outdoor)', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
+      ${slider('ftp', singleFtp(s) ? 'Bike FTP' : 'Bike FTP (outdoor)', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
       ${slider('css', 'Swim CSS', lo('css', est.css - 20), hi('css', est.css + 15), 1)}
       ${slider('thr', 'Run threshold', lo('thr', est.thr - 90), hi('thr', est.thr + 30), 1)}
       ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim, d.swimCont), 100)}
@@ -675,9 +676,10 @@ export function renderSettings(ui, onSave) {
 
       <div class="card-title" style="margin-top:8px">Bike</div>
       <div class="grid2">
-        <div class="field"><label>Indoor FTP (trainer), W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">Your indoor Z2 = ${Math.round(s.ftp * 0.56)}–${Math.round(s.ftp * 0.75)} W.</div></div>
-        <div class="field"><label>Outdoor FTP baseline, W</label><input name="ftpOutdoor" type="number" min="60" max="500" value="${s.ftpOutdoor || ''}" placeholder="auto"><div class="hint">Blank = estimated from speed + HR. Sets the indoor↔outdoor ratio.</div></div>
-        <div class="field"><label>Race target outdoor FTP, W</label><input name="raceTargetW" type="number" min="100" max="500" value="${s.raceTargetW || 230}"></div>
+        ${singleFtp(s) ? `<div class="field"><label>FTP, W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">One FTP — no power meter recorded yet. Tracked from your long outdoor rides and from speed + heart rate on the trainer.</div></div>
+        <div class="field"><label>Indoor trainer type</label><select name="trainerType">${Object.entries(TRAINERS).map(([k, v]) => `<option value="${k}" ${(s.trainerType || 'unknown') === k ? 'selected' : ''}>${v}</option>`).join('')}</select><div class="hint">Shapes the speed→power curve for trainer rides without power.</div></div>` : `<div class="field"><label>Indoor FTP (trainer), W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">Your indoor Z2 = ${Math.round(s.ftp * 0.56)}–${Math.round(s.ftp * 0.75)} W.</div></div>
+        <div class="field"><label>Outdoor FTP baseline, W</label><input name="ftpOutdoor" type="number" min="60" max="500" value="${s.ftpOutdoor || ''}" placeholder="auto"><div class="hint">Blank = estimated from speed + HR. Sets the indoor↔outdoor ratio.</div></div>`}
+        <div class="field"><label>${singleFtp(s) ? 'Race target FTP, W' : 'Race target outdoor FTP, W'}</label><input name="raceTargetW" type="number" min="100" max="500" value="${s.raceTargetW || 230}"></div>
       </div>
       <div class="field"><label class="toggle"><input type="checkbox" name="outdoorPower" ${s.outdoorPower ? 'checked' : ''}> I have a power meter on my outdoor bike</label><div class="hint">Off: outdoor rides are prescribed and judged by heart rate; estimated (Strava) watts are ignored.</div></div>
 
@@ -760,7 +762,7 @@ export function renderSettings(ui, onSave) {
     const patch = {
       athleteId: fd.get('username').trim(), apiKey: fd.get('password').trim(), anthropicKey: fd.get('anthropicKey').trim(), anthropicModel: fd.get('anthropicModel').trim() || DEFAULTS.anthropicModel,
       corsProxy: fd.get('corsProxy').trim(), raceName: fd.get('raceName').trim() || 'Ironman', raceDate: fd.get('raceDate'), goalHours: +fd.get('goalHours') || 12,
-      ftp: +fd.get('ftp') || s.ftp, ftpOutdoor: +fd.get('ftpOutdoor') || null, outdoorPower: fd.get('outdoorPower') === 'on',
+      ftp: +fd.get('ftp') || s.ftp, ftpOutdoor: fd.has('ftpOutdoor') ? (+fd.get('ftpOutdoor') || null) : s.ftpOutdoor, trainerType: fd.get('trainerType') || s.trainerType || 'unknown', outdoorPower: fd.get('outdoorPower') === 'on',
       weightKg: +fd.get('weightKg') || 75, runThreshold: strToPace(fd.get('runThreshold')) || s.runThreshold, css: strToPace(fd.get('css')) || s.css,
       swimContinuous: +fd.get('swimContinuous') || null, runContinuous: +fd.get('runContinuous') || null,
       thresholdSource: fd.get('thresholdSource'), demo: fd.get('demo') === 'on', weekTemplate: tpl.length ? tpl : null,
@@ -863,8 +865,9 @@ function targetCards(data, ui) {
   const base = s.baseline || {};
   const from = isoDate(addDays(new Date(), -84));
   const cards = [];
+  const one = singleFtp(s);
   for (const k of TG_KEYS) {
-    const T = TG[k], t = tg[k];
+    const T = k === 'ftp' && one ? { ...TG.ftp, title: 'FTP' } : TG[k], t = tg[k];
     let pts, roll = null, cur, extra = '', inUse = null;
     if (k === 'easy') {
       pts = easyPaceSeries(acts, 140).filter(p => p.x >= from);
@@ -883,7 +886,7 @@ function targetCards(data, ui) {
     const b = base[k];
     const pct = b ? progress(k, cur, b.value, t.target) : null;
     const st = b ? status(k, cur, b.value, b.date, t.target, s.raceDate, today) : null;
-    const card = h(`<div class="card tg-card" data-help-key="tg-${k}">
+    const card = h(`<div class="card tg-card" data-help-key="tg-${k}${k === 'ftp' && one ? '1' : ''}">
       <div class="row between"><div class="card-title sport-${T.sport}" style="margin:0">${T.title}</div>${st ? `<span class="pill ${st.cls}">${st.label}</span>` : `<span class="pill">${cur == null ? 'No data' : 'Calculating…'}</span>`}</div>
       <div class="tg-head">${goalRing(pct, T.color)}
         <div class="tg-vals"><div><span class="k">Current</span><b style="color:${T.color}">${cur != null ? T.fmt(cur) : '–'}</b></div><div><span class="k">Target</span><b>${T.fmt(t.target)}</b></div>${st ? `<div><span class="k">Expected today</span><b class="muted">${T.fmt(st.exp)}</b></div>` : ''}</div></div>
@@ -902,7 +905,7 @@ function targetCards(data, ui) {
   // threshold change history (kept from the old thresholds card)
   const log = (s.thresholdLog || []).slice(-8).reverse();
   if (log.length) {
-    const lab2 = { ftp: 'Indoor FTP', ftpOutdoor: 'Outdoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
+    const lab2 = { ftp: one ? 'FTP' : 'Indoor FTP', ftpOutdoor: 'Outdoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
     const fm = (f, v) => f === 'ftp' || f === 'ftpOutdoor' ? `${Math.round(v)} W` : paceToStr(v) + (f === 'css' ? '/100m' : '/km');
     cards.push(h(`<div class="card"><details class="more"><summary>Threshold change history (${(s.thresholdLog || []).length})</summary><div class="stack small muted" style="margin-top:6px">${log.map(l => `<div>${fmtDate(l.date)} · ${lab2[l.field] || l.field} ${fm(l.field, l.from)} → <b style="color:var(--text)">${fm(l.field, l.to)}</b> <span class="faint">(${esc(l.source)})</span></div>`).join('')}</div></details></div>`));
   }

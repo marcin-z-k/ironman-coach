@@ -5,6 +5,7 @@
 // Each method yields a value + weight; combined estimate is a weighted mean with a confidence level.
 import { isoDate, addDays, parseDate, round, clamp } from './util.js';
 import { getZoneModel } from './zones.js';
+import { singleFtp, virtualFtp, isVirtualRide } from './virtualpower.js';
 import { isHard } from './history.js';
 import { hrProportional, easyPaceNow, hrZone2, hrToFtpPct } from './analytics.js';
 import { cachedStreams, steadyBlocks, bestWindowWith, steadyEfforts, despike } from './streams.js';
@@ -28,6 +29,11 @@ function windowActs(acts, endIso, days) {
 }
 
 export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
+  if (singleFtp(s)) {                                // no power meter anywhere: one FTP, tracked from speed + HR
+    const v = virtualFtp(acts, s, endIso);
+    if (!v) return { value: null, confidence: 'none', methods: [], unit: 'W', cur };
+    return { value: Math.round(v.value), confidence: v.conf, methods: [{ key: 'virtual', label: v.label, value: Math.round(v.value), weight: 1, detail: v.detail }], unit: 'W', cur, improvement: v.improvement };
+  }
   // INDOOR FTP from indoor rides with real (device) power — outdoor estimated watts are not comparable.
   const rides = windowActs(acts, endIso, days).filter(a => a.sport === 'bike' && a.movingSec >= 1200 && a.indoor && a.deviceWatts !== false);
   const methods = [];
@@ -180,7 +186,7 @@ export function estimateAll(acts, s, endIso) {
 export function estimateTrend(acts, s, endIso, weeks = 12) {
   // recalculated at every relevant activity (not weekly)
   const from = isoDate(addDays(parseDate(endIso), -7 * weeks));
-  const rel = { ftp: a => a.sport === 'bike' && a.indoor, runThreshold: a => a.sport === 'run' && a.movingSec >= 600, css: a => a.sport === 'swim' && !isOpenWater(a) };
+  const rel = { ftp: a => a.sport === 'bike' && (singleFtp(s) ? (isVirtualRide(a) || !a.indoor) : a.indoor), runThreshold: a => a.sport === 'run' && a.movingSec >= 600, css: a => a.sport === 'swim' && !isOpenWater(a) };
   const out = { ftp: [], runThreshold: [], css: [] };
   for (const k of Object.keys(out)) {
     const dates = [...new Set(acts.filter(a => a.date >= from && a.date <= endIso && rel[k](a)).map(a => a.date))].sort();

@@ -14,6 +14,7 @@ export const DEFAULTS = {
   ftp: 150,                 // W — INDOOR (trainer) FTP, used for indoor power targets
   ftpOutdoor: null,         // W — outdoor FTP (only meaningful with an outdoor power meter)
   outdoorPower: false,      // power meter on the outdoor bike?
+  trainerType: 'unknown',   // indoor trainer without power: fluid | magnetic | wind | unknown (virtual power curve)
   swimContinuous: null,     // m you can swim without stopping (null = from your swims)
   runContinuous: null,      // km you can run without walking (null = from longest run)
   weekTemplate: null,       // null = default fixed week

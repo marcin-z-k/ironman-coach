@@ -1,6 +1,7 @@
 // Training analytics: execution score, heat correction, bricks, load management, discipline split,
 // indoor/outdoor FTP coupling. Pure functions on normalised activities / wellness.
 import { load, save, getCache, setCache } from './store.js';
+import { singleFtp } from './virtualpower.js';
 import { collapse, plannedDist, getZoneModel, hrZoneOf } from './zones.js';
 import { cachedStreams, z2PaceRun, longestContinuousRun, bestWindowWith, bestWindowFrac, runMask, steadyBlocks, longestContinuousSwim } from './streams.js';
 import { isoDate, addDays, startOfWeek, parseDate, round, clamp } from './util.js';
@@ -254,6 +255,7 @@ export function continuousSwim(acts, days = 56) {
 
 export function ftpCoupling(acts, s) {
   const target = s.raceTargetW || 230;
+  if (singleFtp(s)) return { target, single: true, ratio: 1, outdoorNow: s.ftp, indoorTarget: target, progress: s.ftp / target, est: null };
   // Only a value YOU entered freezes the ratio; automatic estimates are recalculated on every sync.
   let c = s.ftpCoupling?.source === 'your outdoor FTP' ? s.ftpCoupling : null;
   const est = outdoorFtpEstimate(acts, s);

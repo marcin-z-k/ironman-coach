@@ -15,6 +15,7 @@ import { syncSettings, schedulePush } from './sync.js';
 import { computeBaseline } from './targets.js';
 import { renderRaceDay, raceLocked } from './raceui.js';
 import { attachHelp } from './help.js';
+import { hasRealPower, singleFtp, calibrate } from './virtualpower.js';
 import { fetchActivitiesRange } from './icu.js';
 import { el, esc } from './util.js';
 import { download } from './export.js';
@@ -220,7 +221,7 @@ function applyUpdates(list, source) {
   const patch = {}; const log = [...(s.thresholdLog || [])];
   for (const u of list) { patch[u.field] = u.to; log.unshift({ date: isoDate(new Date()), field: u.field, from: u.from, to: u.to, source: u.source || source, detail: u.methods || '' }); }
   save({ ...patch, thresholdLog: log.slice(0, 40) });
-  const lbl = { ftp: 'indoor FTP', ftpOutdoor: 'outdoor FTP', runThreshold: 'run threshold', css: 'CSS' };
+  const lbl = { ftp: singleFtp(load()) ? 'FTP' : 'indoor FTP', ftpOutdoor: 'outdoor FTP', runThreshold: 'run threshold', css: 'CSS' };
   toast(`Updated ${list.map(u => lbl[u.field]).join(', ')} (${source})`);
 }
 
@@ -248,6 +249,8 @@ function repairCompounded() {
 
 function updateThresholds() {
   repairCompounded();
+  // power meter seen once → separate indoor / outdoor FTPs from then on; otherwise one FTP
+  if (!load().powerSeen && (data?.activities || []).some(hasRealPower)) save({ powerSeen: true });
   const s = load();
   const mode = s.thresholdSource || 'auto';
   const todayIso = isoDate(new Date());
@@ -256,7 +259,9 @@ function updateThresholds() {
   //    changed there (e.g. after a test). Values you typed in Settings are held for 4 weeks.
   const icu = data?.athlete ? thresholdsFromAthlete(data.athlete) : {};
   const icuChanges = [];
+  if (singleFtp(s) && !icu.ftp && icu.ftpOutdoor) icu.ftp = icu.ftpOutdoor;          // one FTP: intervals.icu's FTP is it
   for (const k of ['ftp', 'ftpOutdoor', 'runThreshold', 'css']) {
+    if (singleFtp(s) && k === 'ftpOutdoor') continue;
     if (!icu[k] || (held(k) && mode !== 'intervals')) continue;
     const changedInIcu = !s.lastIcu || (s.lastIcu[k] && s.lastIcu[k] !== icu[k]);
     if ((mode === 'intervals' || changedInIcu) && icu[k] !== s[k]) icuChanges.push({ field: k, from: s[k], to: icu[k], source: 'intervals.icu settings' });
@@ -264,6 +269,16 @@ function updateThresholds() {
   save({ lastIcu: icu });
   if (mode !== 'manual') applyUpdates(icuChanges, 'intervals.icu settings');
   if (mode === 'intervals' || mode === 'manual') return;
+  if (singleFtp(load())) {
+    const prev = load().vpCal, cal = calibrate(data?.activities || [], load());
+    if (cal && JSON.stringify(cal) !== JSON.stringify(prev)) {
+      save({ vpCal: cal });
+      // first calibration from long outdoor rides sets the FTP directly (later changes: ±5 %/week)
+      const s0 = load(), held = s0.holds?.ftp && s0.holds.ftp >= isoDate(new Date());
+      if (cal.source === 'outdoor rides' && prev?.source !== 'outdoor rides' && !held && Math.abs(cal.anchorFtp - s0.ftp) >= 3)
+        applyUpdates([{ field: 'ftp', from: s0.ftp, to: cal.anchorFtp, source: 'calibration from long outdoor rides' }], 'calibration');
+    }
+  }
   // 2) estimates from recent activities (respecting holds)
   const est = estimateAll(data.activities || [], load(), todayIso);
   const props = proposeUpdates(est, load(), todayIso).filter(p => !icuChanges.some(c => c.field === p.field));

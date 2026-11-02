@@ -38,7 +38,7 @@ export function secondaryPredictions(cat, b, s, acts) {
       let t = km / 30;                                    // hours, iterate
       let P = 0, v = 0;
       for (let i = 0; i < 8; i++) { const IF = Math.min(1.0, 0.97 * Math.pow(Math.max(0.3, t), -0.17)); P = ftp * IF; v = flatSpeedFor(P, m); t = km * 1000 / v / 3600; }
-      return { label, sec: t * 3600, kmh: Math.round(v * 36) / 10, unit: 'km/h', note: `${Math.round(P)} W (${Math.round(P / ftp * 100)} % of ${ftp} W outdoor FTP), flat` };
+      return { label, sec: t * 3600, kmh: Math.round(v * 36) / 10, unit: 'km/h', note: `${Math.round(P)} W (${Math.round(P / ftp * 100)} % of ${ftp} W ${c.single ? 'FTP' : 'outdoor FTP'}), flat` };
     });
   }
   if (cat === 'tri') {

@@ -17,7 +17,7 @@ export const LOWER_BETTER = { easy: true, runThreshold: true, ftp: false, css: t
 export function targets(s, acts) {
   const pz = getZoneModel().run.pace, zf = ((pz?.[0] || 77.5) + (pz?.[1] || 87.7)) / 200;
   const cp = ftpCoupling(acts, s);
-  const it = cp.indoorTarget || Math.round((s.raceTargetW || 230) / 1.15);
+  const it = cp.single ? (s.raceTargetW || 230) : (cp.indoorTarget || Math.round((s.raceTargetW || 230) / 1.15));
   return {
     easy: { target: 360, band: [330, 360] },                                   // 5:30–6:00/km
     runThreshold: { target: Math.round(360 * zf), band: [Math.round(330 * zf), Math.round(360 * zf)] },

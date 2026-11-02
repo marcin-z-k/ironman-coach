@@ -1,7 +1,8 @@
 // Workout export: Garmin .FIT workout file, Zwift .ZWO, and intervals.icu workout text
 // (sent to the intervals.icu calendar, which forwards planned workouts to connected devices).
 import { load } from './store.js';
-import { flatten, ftpFor, stepMin } from './workouts.js';
+import { flatten, ftpFor, stepMin, pctToZone } from './workouts.js';
+import { singleFtp } from './virtualpower.js';
 import { hrRange } from './zones.js';
 import { paceToStr, round } from './util.js';
 
@@ -27,6 +28,7 @@ function fitIntensity(k) { return k === 'wu' ? 'warmup' : k === 'cd' ? 'cooldown
 function fitTarget(st, sess, s) {
   const t = st.target;
   if (!t) return { targetType: 'open', targetValue: 0 };
+  if (t.type === 'power' && singleFtp(s)) { const r = hrRange('bike', pctToZone((t.lo + t.hi) / 2)); if (r) return { targetType: 'heartRate', targetValue: 0, customTargetValueLow: 100 + (r[0] || r[1] - 25), customTargetValueHigh: 100 + r[1] }; }
   if (t.type === 'power') { const F = ftpFor(s, sess.indoor); return { targetType: 'power', targetValue: 0, customTargetValueLow: 1000 + Math.round(F * t.lo), customTargetValueHigh: 1000 + Math.round(F * t.hi) }; }
   if (t.type === 'hr') {
     const r = hrRange(sess.sport === 'brick' ? 'run' : sess.sport, t.zone);
@@ -97,6 +99,7 @@ function durTxt(st) {
 function tgtTxt(st, sess, s) {
   const t = st.target;
   if (!t) return sess.sport === 'run' ? `Z${Math.min(5, st.zone || 2)} HR` : '';
+  if (t.type === 'power' && singleFtp(s)) return `Z${pctToZone((t.lo + t.hi) / 2)} HR`;
   if (t.type === 'power') return `${Math.round(t.lo * 100)}-${Math.round(t.hi * 100)}%`;
   if (t.type === 'hr') return `Z${t.zone} HR`;
   if (t.type === 'pace') return `${Math.round(100 / t.hi)}-${Math.round(100 / t.lo)}% Pace`;

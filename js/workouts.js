@@ -6,6 +6,7 @@
 // Blocks: { repeat: n, steps: [...] }
 import { paceToStr, round, clamp } from './util.js';
 import { hrRangeStr } from './zones.js';
+import { singleFtp } from './virtualpower.js';
 
 const ZIF = [0, 0.55, 0.68, 0.8, 0.92, 1.05];
 const lerp = (a, b, p) => a + (b - a) * p;
@@ -19,7 +20,9 @@ export const T = {
   swim: (lo, hi) => ({ type: 'swim', lo, hi }),        // seconds relative to CSS per 100 m
 };
 
-export function ftpFor(s, indoor) { return indoor ? s.ftp : (s.ftpOutdoor || s.ftp); }
+export function ftpFor(s, indoor) { return indoor || singleFtp(s) ? s.ftp : (s.ftpOutdoor || s.ftp); }
+// no power meter: a power target is shown/exported as the matching HR zone
+export const pctToZone = (p) => p < 0.56 ? 1 : p < 0.76 ? 2 : p < 0.88 ? 3 : p < 0.96 ? 4 : 5;
 
 export function flatten(steps) {
   const out = [];
@@ -39,6 +42,7 @@ export function stepMin(st, s) { return st.min != null ? st.min : st.dist ? swim
 export function describeTarget(t, ctx) {
   if (!t) return '';
   const { s, sport, indoor } = ctx;
+  if (t.type === 'power' && singleFtp(s)) { const z = pctToZone((t.lo + t.hi) / 2); const r = hrRangeStr('bike', z); return `HR Z${z}${r ? ' ' + r : ''}`; }
   if (t.type === 'power') { const F = ftpFor(s, indoor); return `${Math.round(F * t.lo)}–${Math.round(F * t.hi)} W`; }
   if (t.type === 'hr') { const r = hrRangeStr(sport === 'brick' ? 'run' : sport, t.zone); return r ? `HR Z${t.zone} ${r}` : `HR Z${t.zone}`; }
   if (t.type === 'pace') return `${paceToStr(s.runThreshold * t.lo)}–${paceToStr(s.runThreshold * t.hi)}/km`;
