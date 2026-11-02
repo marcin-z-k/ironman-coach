@@ -321,3 +321,26 @@ export function steadyEfforts(watts, hr, minSec = 300, tol = 0.1) {
   }
   return out;
 }
+
+// Power spikes: short hard pushes (e.g. 400 W for 2–5 s) are not sustainable power. Any run of
+// ≤ 10 s that is > 1.5× the 31-s rolling median is replaced by that median before estimating FTP.
+export function despike(watts, maxLen = 10, factor = 1.5) {
+  if (!watts) return watts;
+  const n = watts.length, med = new Array(n).fill(null), half = 15;
+  for (let i = 0; i < n; i++) {
+    const w = [];
+    for (let k = Math.max(0, i - half); k <= Math.min(n - 1, i + half); k++) if (watts[k] != null) w.push(watts[k]);
+    if (w.length >= 10) { w.sort((a, b) => a - b); med[i] = w[w.length >> 1]; }
+  }
+  const out = watts.slice();
+  let i = 0, removed = 0;
+  while (i < n) {
+    const hi = (k) => watts[k] != null && med[k] != null && watts[k] > Math.max(med[k] * factor, med[k] + 40);
+    if (!hi(i)) { i++; continue; }
+    let j = i; while (j < n && hi(j)) j++;
+    if (j - i <= maxLen) { for (let k = i; k < j; k++) out[k] = med[k]; removed += j - i; }
+    i = j;
+  }
+  out.removedSec = removed;
+  return out;
+}

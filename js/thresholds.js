@@ -7,7 +7,7 @@ import { isoDate, addDays, parseDate, round, clamp } from './util.js';
 import { getZoneModel } from './zones.js';
 import { isHard } from './history.js';
 import { hrProportional, easyPaceNow, hrZone2, hrToFtpPct } from './analytics.js';
-import { cachedStreams, steadyBlocks, bestWindowWith, steadyEfforts } from './streams.js';
+import { cachedStreams, steadyBlocks, bestWindowWith, steadyEfforts, despike } from './streams.js';
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -36,27 +36,40 @@ export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
   // Heat, HR drift and fatigue only ever make the watts at a given HR LOWER, so the best recent
   // readings are the truest — we use the upper end, not the median.
   // A) steady efforts ≥ 5 min (intervals like 3×6 min, steady blocks): FTP = P ÷ %FTP(HR of the 2nd half)
-  //    → median of the 3 highest of the last 6 weeks                                          weight 0.6
+  //    → each ride's best effort, median of the best 3 rides                                   weight 0.6 (0.3 with 1 ride)
   // B) zone-2 envelope: 3-min blocks with HR in Z2, P ÷ %FTP(HR) → 80th percentile             weight 0.25
   // C) watts↔HR line read off at LTHR (only if the line is tight, r > 0.7)                      weight 0.15
+  // B) only efforts at or above the MIDDLE of zone 2 (≥ 65.5 % FTP) — below that, a few bpm of
+  //    sensor error or HR lag change the result too much
+  // C) each ride counts once (its best effort); reading = median of the best rides (needs ≥ 2 rides
+  //    for full weight)
+  // spikes: short pushes (≤ 10 s, > 1.5× the 31-s median) are replaced before anything is computed
   const effs = [], z2v = [], blocks = [];
   const z2 = hrZone2();
+  const MIN_PCT = 0.655;
+  let spikeSec = 0;
+  const wattsOf = new Map();
   for (const a of rides) {
     const st = cachedStreams(a.id); if (!st?.watts || !st.hr) continue;
-    for (const e of steadyEfforts(st.watts, st.hr, 300, 0.1)) {
+    const W = despike(st.watts); spikeSec += W.removedSec || 0; wattsOf.set(a.id, W);
+    let best = null;
+    for (const e of steadyEfforts(W, st.hr, 300, 0.1)) {
       if ((st.time?.[e.start] ?? e.start) < 300) continue;            // skip the first 5 min (warm-up, HR not settled)
-      const pct = hrToFtpPct(e.hr); if (!pct) continue;
-      effs.push({ ftp: e.P / pct, P: e.P, hr: Math.round(e.hr), min: Math.round(e.sec / 60), date: a.date, pct });
+      const pct = hrToFtpPct(e.hr); if (!pct || pct < MIN_PCT) continue;
+      const r = { ftp: e.P / pct, P: e.P, hr: Math.round(e.hr), min: Math.round(e.sec / 60), date: a.date, pct };
+      if (!best || r.ftp > best.ftp) best = r;
     }
-    const ok = st.watts.map(w => w != null && w > 30);
-    const bl = steadyBlocks(st.watts, st.hr, st.time, ok);
+    if (best) effs.push(best);
+    const ok = W.map(w => w != null && w > 30);
+    const bl = steadyBlocks(W, st.hr, st.time, ok);
     blocks.push(...bl);
     if (z2) for (const [h, w] of bl) if (h >= z2[0] - 2 && h <= z2[1] + 2) { const pct = hrToFtpPct(h); if (pct) z2v.push(w / pct); }
   }
   if (effs.length) {
     const top = effs.slice().sort((x, y) => y.ftp - x.ftp).slice(0, 3);
     const b0 = top[0];
-    methods.push({ key: 'efforts', label: 'Steady efforts ≥ 5 min', value: Math.round(median(top.map(e => e.ftp))), weight: 0.6, detail: `best: ${Math.round(b0.P)} W for ${b0.min} min at ${b0.hr} bpm (= ${Math.round(b0.pct * 100)} % FTP) on ${b0.date} · ${effs.length} efforts` });
+    const one = effs.length < 2;
+    methods.push({ key: 'efforts', label: 'Steady efforts ≥ 5 min', value: Math.round(median(top.map(e => e.ftp))), weight: one ? 0.3 : 0.6, detail: `best: ${Math.round(b0.P)} W for ${b0.min} min at ${b0.hr} bpm (= ${Math.round(b0.pct * 100)} % FTP) on ${b0.date} · best effort of ${effs.length} ride${one ? ' — only 1 ride, half weight' : 's'}${spikeSec ? ` · ${spikeSec} s of power spikes ignored` : ''}` });
   }
   if (z2v.length >= 3) { z2v.sort((x, y) => x - y); methods.push({ key: 'z2', label: 'Zone-2 watts (upper end)', value: Math.round(z2v[Math.floor(z2v.length * 0.8)]), weight: 0.25, detail: `80th percentile of ${z2v.length} zone-2 blocks, HR ${z2 ? z2.join('–') : ''} bpm` }); }
   if (L && blocks.length >= 8) {
@@ -67,7 +80,7 @@ export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
     }
   }
   const held = [];
-  for (const a of rides) { const st = cachedStreams(a.id); if (!st?.watts) continue; const w = bestWindowWith(st.watts, null, st.watts.map(x => x != null), 3600); if (w) held.push(w.mean); }
+  for (const a of rides) { const st = cachedStreams(a.id); if (!st?.watts) continue; const W = wattsOf.get(a.id) || despike(st.watts); const w = bestWindowWith(W, null, W.map(x => x != null), 3600); if (w) held.push(w.mean); }
   const withE = rides.filter(a => a.eftp).sort((a, b) => b.date.localeCompare(a.date));
   // fallback without streams: whole-ride NP vs HR (proportional)
   if (!methods.some(m => m.key === 'blocks' || m.key === 'efforts' || m.key === 'z2') && L) {
@@ -186,7 +199,12 @@ export function proposeUpdates(est, s, todayIso = new Date().toISOString().slice
     if (held(k)) continue;
     if (!e.value || e.confidence === 'none' || e.confidence === 'low') continue;
     const curV = s[k];
-    const capped = clamp(e.value, curV * 0.95, curV * 1.05);
+    // max ±5 % per 7 DAYS (not per update run): reference = value in use before the first automatic
+    // change of this field in the last 7 days
+    const wk = isoDate(addDays(parseDate(todayIso), -7));
+    const autoCh = (s.thresholdLog || []).filter(l => l.field === k && l.date > wk && (l.source === 'activity estimate' || l.source === 'repair'));
+    const ref = autoCh.length ? (autoCh.find(l => l.source === 'repair')?.to ?? autoCh[autoCh.length - 1].from) : curV;
+    const capped = clamp(e.value, Math.min(curV, ref * 0.95), Math.max(curV, ref * 1.05));
     const to = Math.round(capped);
     if (Math.abs(to - curV) < minDelta[k]) continue;
     out.push({ field: k, from: curV, to, raw: e.value, confidence: e.confidence, methods: e.methods.map(m => m.label).join(', ') });

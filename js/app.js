@@ -224,7 +224,30 @@ function applyUpdates(list, source) {
   toast(`Updated ${list.map(u => lbl[u.field]).join(', ')} (${source})`);
 }
 
+// One-time repair: the ±5 % step used to apply per update run, so several runs in a row could
+// compound (160 → 204 W). Reset to the value before that day + 5 %.
+function repairCompounded() {
+  const s = load();
+  if (s.mig3) return;
+  const log = [...(s.thresholdLog || [])], patch = { mig3: true };
+  for (const k of ['ftp', 'runThreshold', 'css']) {
+    const byDay = {};
+    for (const l of log) if (l.field === k && l.source === 'activity estimate') (byDay[l.date] ||= []).push(l);
+    for (const [d, list] of Object.entries(byDay)) {
+      if (list.length < 2) continue;
+      const first = list[list.length - 1], last = list[0];            // log is newest-first
+      if (Math.abs(last.to / first.from - 1) > 0.055 && s[k] === last.to) {
+        patch[k] = Math.round(first.from * (last.to > first.from ? 1.05 : 0.95));
+        log.unshift({ date: isoDate(new Date()), field: k, from: s[k], to: patch[k], source: 'repair', detail: `undid ${list.length} stacked updates from ${d} (max ±5 % per week)` });
+      }
+    }
+  }
+  patch.thresholdLog = log.slice(0, 40);
+  save(patch);
+}
+
 function updateThresholds() {
+  repairCompounded();
   const s = load();
   const mode = s.thresholdSource || 'auto';
   const todayIso = isoDate(new Date());
