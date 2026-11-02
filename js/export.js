@@ -7,14 +7,14 @@ import { paceToStr, round } from './util.js';
 
 // Garmin's FIT SDK license does not allow redistributing it here, so it is loaded from npm CDNs at runtime.
 const FIT_URLS = ['https://cdn.jsdelivr.net/npm/@garmin/fitsdk@21.218.0/+esm', 'https://unpkg.com/@garmin/fitsdk@21.218.0/src/index.js'];
-async function loadFit() {
+export async function loadFit() {
   let last;
   for (const u of FIT_URLS) { try { return await import(u); } catch (e) { last = e; } }
   throw new Error('could not load the Garmin FIT library (offline?)');
 }
 const safeName = (t) => t.replace(/[^\w\-× ]+/g, '').replace(/×/g, 'x').trim().slice(0, 40) || 'workout';
 
-function download(bytes, filename, mime) {
+export function download(bytes, filename, mime) {
   const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -125,4 +125,3 @@ export function icuEvent(sess) {
   const type = sess.sport === 'bike' ? (sess.indoor ? 'VirtualRide' : 'Ride') : sess.sport === 'swim' ? 'Swim' : 'Run';
   return { category: 'WORKOUT', start_date_local: `${sess.date}T00:00:00`, type, name: sess.title, description: intervalsText(sess), external_id: `ironman-coach-${sess.id}`, moving_time: Math.round(sess.min * 60), ...(sess.dist ? { distance: sess.dist } : {}) };
 }
-export { download };

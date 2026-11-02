@@ -20,6 +20,25 @@ export function fueling(min, intensity = 'easy', tempC = null) {
   return { carbs, total, fluid, sodium, example, note: min >= 150 ? 'Above 60 g/h use glucose + fructose (2:1). Start eating in the first 20 min, then every 15–20 min.' : min >= 60 ? 'Start fueling after ~30 min, small amounts every 15–20 min.' : '' };
 }
 
+// GUT TRAINING — progressive carbohydrate intake for sessions over 2 h.
+// Evidence: the gut adapts to high carb intake within ~2–4 weeks of repeated practice (more SGLT1/
+// GLUT5 transport, less malabsorption and fewer GI symptoms — Cox et al. 2010, J Appl Physiol;
+// Costa et al. 2017, Appl Physiol Nutr Metab; Jeukendrup 2017, Sports Med "Training the gut").
+// Ramp ~10 g/h every 2–3 weeks, from today's comfortable level to the race-day target.
+//   race-day targets:  bike 80–90 g/h · run 50–70 g/h
+//   start levels:      bike 50–60 g/h · run 30–40 g/h  (until 24 weeks out)
+//   linear ramp from 24 weeks out → full target 6 weeks before race day, then held
+export const GUT = { bike: { from: [50, 60], to: [80, 90] }, run: { from: [30, 40], to: [50, 70] } };
+export function gutTraining(sport, dateIso, raceDate) {
+  const g = GUT[sport]; if (!g) return null;
+  const weeks = (new Date(raceDate) - new Date(dateIso)) / (7 * 864e5);
+  const f = Math.max(0, Math.min(1, (24 - weeks) / (24 - 6)));
+  const r5 = v => Math.round(v / 5) * 5;
+  const carbs = [r5(g.from[0] + (g.to[0] - g.from[0]) * f), r5(g.from[1] + (g.to[1] - g.from[1]) * f)];
+  const stage = f >= 1 ? 'race-day target — practise your race fuel' : f <= 0 ? 'base level — gut training starts 24 weeks out' : `gut training ${Math.round(f * 100)} % of the way to race level`;
+  return { carbs, target: g.to, stage, f };
+}
+
 export function intensityOf(sess) {
   if (!sess) return 'easy';
   if (sess.if >= 0.85) return 'hard';

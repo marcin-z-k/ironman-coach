@@ -3,6 +3,9 @@ import { PHASES, DEFAULT_TEMPLATE } from './plan.js';
 import { load, save, DEFAULTS, storageWorks } from './store.js';
 import { summarise, getSummary, ruleSummary } from './analysis.js';
 import { renderWidgets } from './health.js';
+import { readiness, recoveryHours, sleepCoach, recoveryTips, fmtH } from './recovery.js';
+import { availableCategories, secondaryPredictions, CAT_LABEL, fmtRace } from './predictors.js';
+import { targets, progress, status, pathPts, LOWER_BETTER, KEYS as TG_KEYS } from './targets.js';
 import { hrRangeStr, hrZoneOf, plannedDist, getZoneModel } from './zones.js';
 import { estimateAll, estimateTrend } from './thresholds.js';
 import { describeTarget, fmtMin, ROLES, myWhoosh } from './workouts.js';
@@ -11,7 +14,7 @@ import { predict } from './predict.js';
 import { lineChart, barChart } from './charts.js';
 import { openActivity, scoreBadge } from './detail.js';
 import { executionScore, tagBricks, weeklyTiz, rampRate, monotony, greyZone, disciplineSplit, IM_TARGET, ftpCoupling, easyPaceSeries } from './analytics.js';
-import { fueling, intensityOf, carbLoading } from './nutrition.js';
+import { fueling, intensityOf, carbLoading, gutTraining } from './nutrition.js';
 
 const h = (html) => el(html);
 const sportOf = x => x.sport === 'brick' ? 'run' : x.sport;
@@ -35,6 +38,7 @@ export function renderToday(A, ui) {
   root.append(renderRings(A, ui, week));
   if (daysLeft >= 0 && daysLeft < 14) root.append(carbCard(s, daysLeft));
   root.append(renderWidgets(ui.data, ui));
+  const rc = recoveryCard(ui.data); if (rc) root.append(rc);
 
   if (ui.pending?.length) {
     const lbl = { ftp: 'Indoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
@@ -204,6 +208,10 @@ function mwBlock(x) {
 function fuelLine(x) {
   if (x.kind === 'race' || x.sport === 'swim') return '';
   const f = fueling(x.min, intensityOf(x));
+  if (x.min >= 120 && (x.sport === 'bike' || x.sport === 'run')) {
+    const g = gutTraining(x.sport, x.date, load().raceDate);
+    if (g) { const hrs = x.min / 60; return `<div class="fuel-line gut"><span>⛽</span><span><b>${g.carbs[0]}–${g.carbs[1]} g carbs/h</b> (${Math.round(g.carbs[0] * hrs)}–${Math.round(g.carbs[1] * hrs)} g total) · ${f.fluid[0]}–${f.fluid[1]} ml/h · ${f.sodium[0]}–${f.sodium[1]} mg sodium/h<br><span class="faint">Long-session fueling · ${esc(g.stage)} (race: ${g.target[0]}–${g.target[1]} g/h)</span></span></div>`; }
+  }
   if (!f.carbs[1]) return '';
   return `<div class="fuel-line"><span>⛽</span><span><b>${f.carbs[0]}–${f.carbs[1]} g carbs/h</b> (${f.total[0]}–${f.total[1]} g total) · ${f.fluid[0]}–${f.fluid[1]} ml/h</span></div>`;
 }
@@ -338,15 +346,15 @@ function summaryBadge(sm) { if (!sm) return '<span class="pill">…</span>'; con
 export function renderProgress(A, ui, data) {
   const root = h('<div class="stack" style="gap:12px"></div>');
   const acts = data?.activities || [];
-  root.append(simulatorCard(A, ui, acts));
+  if (!load().hideMainPrediction) root.append(simulatorCard(A, ui, acts));
+  root.append(...targetCards(data, ui));
   root.append(loadCard(acts, data?.wellness || []));
   root.append(pmcCard(A, data, ui));
   root.append(tizCard(acts, ui));
   root.append(splitCard(acts));
   root.append(couplingCard(acts, ui));
-  root.append(easyPaceCard(data, ui));
-  root.append(thresholdCard(data, ui));
   root.append(volumeCard(A, data));
+  const sp = secondaryCard(A, ui, acts); if (sp) root.append(sp);
   return root;
 }
 
@@ -644,6 +652,20 @@ export function renderSettings(ui, onSave) {
       </div>
       <label class="switch-row"><span><b>Indoor Trainer Mode</b><span class="hint" style="display:block">Long rides on the trainer (MyWhoosh): capped at 3 h, more quality per minute.</span></span><input type="checkbox" class="ios" name="indoorMode" ${s.indoorMode ? 'checked' : ''}></label>
 
+      <div class="card-title" style="margin-top:8px">Race day & predictions</div>
+      <label class="switch-row"><span><b>Hide Main Race Prediction</b><span class="hint" style="display:block">Hides the "Projected finish" box on Progress (less pressure before race day). Race predictors at the bottom stay.</span></span><input type="checkbox" class="ios" name="hideMainPrediction" ${s.hideMainPrediction ? 'checked' : ''}></label>
+      <label class="switch-row"><span><b>Hide Race Day icon until 2 weeks before race</b><span class="hint" style="display:block">Off: the tab is visible but greyed out until then.</span></span><input type="checkbox" class="ios" name="hideRaceDayIcon" ${s.hideRaceDayIcon ? 'checked' : ''}></label>
+      <label class="switch-row"><span><b>${s.raceSupported === false ? 'Unsupported race' : 'Supported race'}</b><span class="hint" style="display:block">On: aid stations (drinks, water) along the course. Off: you carry all food and fluids.</span></span><input type="checkbox" class="ios" name="raceSupported" ${s.raceSupported === false ? '' : 'checked'}></label>
+      <div class="grid2">
+        <div class="field"><label>Gel size (g carbs)</label><input name="gelCarbs" type="number" min="10" max="60" step="1" value="${s.gelCarbs || 25}"></div>
+        <div class="field"><label>Sodium per gel (mg)</label><input name="gelSodium" type="number" min="0" max="500" step="5" value="${s.gelSodium ?? 50}"></div>
+        <div class="field"><label>Bottle size (ml)</label><input name="bottleMl" type="number" min="250" max="1000" step="50" value="${s.bottleMl || 750}"></div>
+        <div class="field"><label>Carbs per bottle (g, 0 = water)</label><input name="bottleCarbs" type="number" min="0" max="150" step="5" value="${s.bottleCarbs ?? 60}"></div>
+        <div class="field"><label>Sodium per bottle (mg)</label><input name="bottleSodium" type="number" min="0" max="2000" step="50" value="${s.bottleSodium ?? 300}"></div>
+        <div class="field"><label>Salt capsule (mg sodium)</label><input name="saltCapMg" type="number" min="50" max="1000" step="10" value="${s.saltCapMg || 250}"></div>
+        <div class="field"><label>Sleep baseline (h)</label><input name="sleepBaseH" type="number" min="6" max="10" step="0.25" value="${s.sleepBaseH || 8}"></div>
+      </div>
+
       <div class="card-title" style="margin-top:8px">intervals.icu</div>
       <div class="grid2">
         <div class="field"><label for="athleteId">Athlete ID</label><input id="athleteId" name="username" value="${esc(s.athleteId)}" placeholder="i123456" autocomplete="username" autocapitalize="off" spellcheck="false"></div>
@@ -743,6 +765,8 @@ export function renderSettings(ui, onSave) {
       swimContinuous: +fd.get('swimContinuous') || null, runContinuous: +fd.get('runContinuous') || null,
       thresholdSource: fd.get('thresholdSource'), demo: fd.get('demo') === 'on', weekTemplate: tpl.length ? tpl : null,
       planSource: fd.get('planSource') || 'default', indoorMode: fd.get('indoorMode') === 'on',
+      hideMainPrediction: fd.get('hideMainPrediction') === 'on', hideRaceDayIcon: fd.get('hideRaceDayIcon') === 'on', raceSupported: fd.get('raceSupported') === 'on',
+      gelCarbs: +fd.get('gelCarbs') || 25, gelSodium: +(fd.get('gelSodium') ?? 50), bottleMl: +fd.get('bottleMl') || 750, bottleCarbs: +(fd.get('bottleCarbs') ?? 60), bottleSodium: +(fd.get('bottleSodium') ?? 300), saltCapMg: +fd.get('saltCapMg') || 250, sleepBaseH: +fd.get('sleepBaseH') || 8,
       goal: fd.get('planSource') === 'custom' ? s.goal : { type: fd.get('goalType'), tri: fd.get('goalTri'), runKm: +fd.get('goalRunKm') || 42.195, bikeKm: +fd.get('goalBikeKm') || 100, bikeHm: +fd.get('goalBikeHm') || 0, swimM: +fd.get('goalSwimM') || 3800 },
       planStart: fd.get('planStart') || s.planStart || today,
     };
@@ -793,4 +817,111 @@ export function renderSetup(onDemo, onLogin) {
     onLogin(id, fd.get('password').trim());
   };
   return root;
+}
+
+// ---- recovery (Today) -------------------------------------------------------------------
+function recoveryCard(data) {
+  const well = data?.wellness || [], acts = data?.activities || [];
+  if (!well.length) return null;
+  const now = new Date();
+  const rd = readiness(well, acts, now), rec = recoveryHours(well, acts, now), sc = sleepCoach(well, acts, now);
+  const tips = recoveryTips(rd, rec, sc);
+  const col = rd ? (rd.now >= 70 ? 'var(--good)' : rd.now >= 45 ? 'var(--warn)' : 'var(--bad)') : 'var(--muted)';
+  const card = h(`<div class="card rec-card" data-help-key="recovery">
+    <div class="card-title">Recovery</div>
+    <div class="split">
+      <div class="metric"><div class="v" style="color:${col}">${rd ? rd.now : '–'}</div><div class="k">Readiness now${rd && rd.strain ? ` <span class="faint">(${rd.morning} this morning − ${rd.strain} today)</span>` : ''}</div></div>
+      <div class="metric"><div class="v">${rec.hours ? rec.hours + ' h' : 'Ready'}</div><div class="k">Recovery time${rec.why.length ? ` <span class="faint">(+ ${esc(rec.why.join(', '))})</span>` : ''}</div></div>
+      <div class="metric"><div class="v" style="color:#9b8cff">${fmtH(sc.need)}</div><div class="k">Sleep need tonight</div></div>
+    </div>
+    <details class="more" style="margin-top:10px" open><summary>How to recover faster</summary>
+      <div class="stack" style="gap:8px;margin-top:6px">${tips.map(([t, d]) => `<div class="small"><b>${esc(t)}</b> <span class="muted">${esc(d)}</span></div>`).join('')}</div>
+    </details>
+  </div>`);
+  return card;
+}
+
+// ---- goal widgets: easy pace · run threshold · indoor FTP · swim CSS ---------------------------
+const TG = {
+  easy: { title: 'Easy Running Pace', sport: 'run', color: '#3dffa0', fmt: v => paceToStr(v) + '/km' },
+  runThreshold: { title: 'Run Threshold Pace', sport: 'run', color: '#58e39a', fmt: v => paceToStr(v) + '/km' },
+  ftp: { title: 'Indoor Cycling FTP', sport: 'bike', color: '#ffb020', fmt: v => Math.round(v) + ' W' },
+  css: { title: 'Swim CSS', sport: 'swim', color: '#4cc3ff', fmt: v => paceToStr(v) + '/100m' },
+};
+function goalRing(pct, color) {
+  const r = 30, c = 2 * Math.PI * r, f = pct == null ? 0 : Math.max(0.02, pct);
+  const txt = pct == null ? '–' : pct < 0.01 ? '<1%' : Math.round(pct * 100) + '%';
+  return `<div class="goalring"><svg viewBox="0 0 76 76"><circle cx="38" cy="38" r="${r}" stroke="rgba(255,255,255,.08)" stroke-width="8" fill="none"/><circle class="gr-fill" cx="38" cy="38" r="${r}" stroke="${color}" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c}" style="--to:${c * (1 - f)};filter:drop-shadow(0 0 6px ${color}88)" transform="rotate(-90 38 38)"/></svg><b>${txt}</b></div>`;
+}
+function targetCards(data, ui) {
+  const s = load();
+  const acts = data?.activities || [];
+  const today = isoDate(new Date());
+  const est = estimateAll(acts, s, today);
+  const trend = estimateTrend(acts, s, today, 12);
+  const tg = targets(s, acts);
+  const base = s.baseline || {};
+  const from = isoDate(addDays(new Date(), -84));
+  const cards = [];
+  for (const k of TG_KEYS) {
+    const T = TG[k], t = tg[k];
+    let pts, roll = null, cur, extra = '', inUse = null;
+    if (k === 'easy') {
+      pts = easyPaceSeries(acts, 140).filter(p => p.x >= from);
+      roll = pts.map((p, i) => { const w = pts.slice(Math.max(0, i - 4), i + 1).map(x => x.y).sort((a, b) => a - b); return { x: p.x, y: w[w.length >> 1] }; });
+      cur = roll.length ? roll[roll.length - 1].y : null;
+      extra = '<div class="small faint">Median pace of the parts of each run with HR in zone 2 (warm-up, walking and GPS drop-outs ignored, heat-corrected). Current = median of your last 5 runs.</div>';
+    } else {
+      const e = est[k]; inUse = s[k];
+      pts = trend[k].filter(p => p.value != null && p.date >= from).map(p => ({ x: p.date, y: p.value }));
+      cur = e.value ?? inUse;
+      const held = s.holds?.[k] && s.holds[k] >= today;
+      extra = `<div class="small muted">In use for training: <b style="color:var(--text)">${T.fmt(inUse)}</b>${held ? ` · <span class="sport-bike">your value kept until ${fmtDate(s.holds[k], { day: 'numeric', month: 'short' })}</span>` : ''}</div>
+        ${e.hint ? `<div class="small" style="color:var(--warn)">${esc(e.hint)}</div>` : ''}${e.info ? `<div class="small faint">${esc(e.info)}</div>` : ''}
+        ${e.methods.length ? `<div class="small faint">${e.methods.map(m => `${esc(m.label)}: ${T.fmt(m.value)} <span class="faint">(${esc(m.detail)})</span>`).join(' · ')}</div>` : '<div class="small faint">Not enough suitable activities in the last 6 weeks.</div>'}`;
+    }
+    const b = base[k];
+    const pct = b ? progress(k, cur, b.value, t.target) : null;
+    const st = b ? status(k, cur, b.value, b.date, t.target, s.raceDate, today) : null;
+    const card = h(`<div class="card tg-card" data-help-key="tg-${k}">
+      <div class="row between"><div class="card-title sport-${T.sport}" style="margin:0">${T.title}</div>${st ? `<span class="pill ${st.cls}">${st.label}</span>` : `<span class="pill">${cur == null ? 'No data' : 'Calculating…'}</span>`}</div>
+      <div class="tg-head">${goalRing(pct, T.color)}
+        <div class="tg-vals"><div><span class="k">Current</span><b style="color:${T.color}">${cur != null ? T.fmt(cur) : '–'}</b></div><div><span class="k">Target</span><b>${T.fmt(t.target)}</b></div>${st ? `<div><span class="k">Expected today</span><b class="muted">${T.fmt(st.exp)}</b></div>` : ''}</div></div>
+      <div class="tg-chart"></div>
+      <details class="more"><summary>Details</summary><div class="stack" style="gap:6px;margin-top:6px">${extra}</div></details>
+    </div>`);
+    if (pts.length >= 2) {
+      const series = [];
+      if (roll) series.push({ name: 'Run', color: T.color + '88', pts, dots: true, width: 0.01, fmt: T.fmt }, { name: 'Current (5-run median)', color: T.color, pts: roll, width: 2.6, fmt: T.fmt });
+      else series.push({ name: 'Estimate', color: T.color, pts, dots: true, fmt: T.fmt }, { name: 'In use', color: '#9aa3b2', pts: pts.map(p => ({ x: p.x, y: inUse })), dash: true, width: 1.2, fmt: T.fmt });
+      if (b) series.push({ name: 'Target path', color: '#e8ecf3', pts: pathPts(b.value, b.date, t.target, s.raceDate, pts[0].x, today), dash: true, width: 1.6, fmt: T.fmt });
+      card.querySelector('.tg-chart').append(lineChart({ height: 150, invert: LOWER_BETTER[k], today, yFmt: v => T.fmt(v).replace('/100m', '').replace('/km', ''), bands: [{ y0: t.band[0], y1: t.band[1], color: 'rgba(88,227,154,.09)', label: 'goal' }], series }));
+    } else card.querySelector('.tg-chart').append(h(`<div class="muted small">${k === 'easy' ? 'Needs a few runs with heart rate.' : 'Needs a few activities.'}</div>`));
+    cards.push(card);
+  }
+  // threshold change history (kept from the old thresholds card)
+  const log = (s.thresholdLog || []).slice(-8).reverse();
+  if (log.length) {
+    const lab2 = { ftp: 'Indoor FTP', ftpOutdoor: 'Outdoor FTP', runThreshold: 'Run threshold', css: 'Swim CSS' };
+    const fm = (f, v) => f === 'ftp' || f === 'ftpOutdoor' ? `${Math.round(v)} W` : paceToStr(v) + (f === 'css' ? '/100m' : '/km');
+    cards.push(h(`<div class="card"><details class="more"><summary>Threshold change history (${(s.thresholdLog || []).length})</summary><div class="stack small muted" style="margin-top:6px">${log.map(l => `<div>${fmtDate(l.date)} · ${lab2[l.field] || l.field} ${fm(l.field, l.from)} → <b style="color:var(--text)">${fm(l.field, l.to)}</b> <span class="faint">(${esc(l.source)})</span></div>`).join('')}</div></details></div>`));
+  }
+  return cards;
+}
+
+// ---- secondary race predictors (read-only) ------------------------------------------------------
+function secondaryCard(A, ui, acts) {
+  const cats = availableCategories(acts);
+  if (!cats.length) return null;
+  const cur = cats.includes(ui.predCat) ? ui.predCat : cats[0];
+  const s = load();
+  const rows = secondaryPredictions(cur, A.goal.base, s, acts);
+  const card = h(`<div class="card" data-help-key="secondary">
+    <div class="row between"><div class="card-title" style="margin:0">Race predictors</div>
+      <select class="pred-sel" aria-label="Discipline">${cats.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${CAT_LABEL[c]}</option>`).join('')}</select></div>
+    <div class="small faint" style="margin:6px 0 10px">Reference only — from your logged activities. Not linked to your race goal or training plan.</div>
+    <div class="pred-rows">${rows.map(r => `<div class="pred-row"><div><b>${esc(r.label)}</b>${r.note ? `<div class="small faint">${esc(r.note)}</div>` : ''}</div><div style="text-align:right"><b class="mono">${fmtRace(r.sec)}</b><div class="small muted">${r.pace ? paceToStr(r.pace) + r.unit : r.kmh ? r.kmh + ' km/h' : ''}</div></div></div>`).join('')}</div>
+  </div>`);
+  card.querySelector('.pred-sel').onchange = (e) => { ui.predCat = e.target.value; ui.keepScroll(); ui.rerender(); };
+  return card;
 }

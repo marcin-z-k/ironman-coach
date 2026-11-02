@@ -12,6 +12,10 @@ import { prefetch } from './streams.js';
 import { aiCoachPrompt, importPlan, exportPlan, goalFromMeta } from './customplan.js';
 import { setCache, getCache, setOnChange } from './store.js';
 import { syncSettings, schedulePush } from './sync.js';
+import { computeBaseline } from './targets.js';
+import { renderRaceDay, raceLocked } from './raceui.js';
+import { attachHelp } from './help.js';
+import { fetchActivitiesRange } from './icu.js';
 import { el, esc } from './util.js';
 import { download } from './export.js';
 import { renderFuelSheet } from './ui.js';
@@ -19,7 +23,7 @@ import { renderFuelSheet } from './ui.js';
 const view = document.getElementById('view');
 const syncStatus = document.getElementById('syncStatus');
 const btnRefresh = document.getElementById('btnRefresh');
-const TABS = ['today', 'plan', 'activities', 'progress', 'settings'];
+const TABS = ['today', 'plan', 'activities', 'progress', 'race', 'settings'];
 const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 let data = cached();
@@ -32,6 +36,7 @@ const sheet = document.getElementById('sheet');
 const sheetPanel = sheet.querySelector('.sheet-panel');
 function openSheet(node) {
   sheetPanel.innerHTML = ''; sheetPanel.append(node); sheetPanel.scrollTop = 0;
+  attachHelp(node); [800, 2500, 6000].forEach(t => setTimeout(() => attachHelp(node), t));   // detail cards that load later
   sheet.hidden = false; document.body.classList.add('noscroll');
   requestAnimationFrame(() => sheet.classList.add('open'));
 }
@@ -186,11 +191,15 @@ function render() {
       case 'plan': node = renderPlan(A, ui); break;
       case 'activities': node = renderActivities(A, ui, data); break;
       case 'progress': node = renderProgress(A, ui, data); break;
+      case 'race': node = renderRaceDay(A, ui, data); break;
       case 'settings': node = renderSettings(ui, onSave); break;
       default: node = renderToday(A, ui);
     }
   }
   view.append(node);
+  attachHelp(view);
+  const rt = document.querySelector('.tab[data-tab="race"]');
+  if (rt) { const s = load(), lk = isConfigured() && raceLocked(s); rt.classList.toggle('locked', lk); rt.hidden = lk && !!s.hideRaceDayIcon; }
   animate(node, fresh);
   if (keepScrollY != null) { window.scrollTo({ top: keepScrollY }); keepScrollY = null; }
   updateStatus();
@@ -239,6 +248,22 @@ function updateThresholds() {
   else ui.pending = props;
 }
 
+// Goal-ring baseline (0 %): your level in your first logged activities — all intervals.icu history,
+// computed once and synced to your other devices.
+let baselineBusy = false;
+async function ensureBaseline() {
+  const s = load();
+  if (baselineBusy || !data?.activities || (s.baseline && s.baseline.v === 1)) return;
+  baselineBusy = true;
+  try {
+    const older = await fetchActivitiesRange('2000-01-01', isoDate(addDays(new Date(), -149))).catch(() => []);
+    const ids = new Set(data.activities.map(a => a.id));
+    const all = data.activities.concat(older.filter(a => !ids.has(a.id)));
+    save({ baseline: computeBaseline(all, load()) });
+    A = null; render();
+  } finally { baselineBusy = false; }
+}
+
 async function sync(fromLogin = false) {
   if (!isConfigured() || syncing) { render(); return; }
   syncing = true; btnRefresh.classList.add('spin'); updateStatus();
@@ -249,6 +274,7 @@ async function sync(fromLogin = false) {
     const rhr = (data.wellness || []).map(w => w.restingHR).filter(Boolean).slice(-14);
     if (rhr.length) save({ restHr: Math.round(rhr.sort((a, b) => a - b)[rhr.length >> 1]) });
     updateThresholds();
+    ensureBaseline();
     loadRunStreams();
     A = null;
     if (!load().demo) { backupCredentials(); if (fromLogin) rememberInPasswordManager(); }

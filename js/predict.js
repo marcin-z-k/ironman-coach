@@ -47,8 +47,8 @@ export function baseline(acts, s) {
   // continuous running = longest stretch without walking (> 2 min slower than 9:00/km), +10 % race-day boost
   const cr = continuousRun(acts, 56);
   out.runContInfo = cr;
-  out.runCont = clamp(round(s.runContinuous || (cr ? cr.km * 1.1 : Math.min(out.runLongestKm, 8)), 1), 3, 42.2);
-  out.notes.runCont = s.runContinuous ? 'your Settings value' : cr ? `longest stretch without walking: ${cr.km} km (${cr.run.date})${cr.withWalk ? ` · ${cr.withWalk} recent run${cr.withWalk > 1 ? 's' : ''} with walk breaks` : ''}` : 'no run data';
+  out.runCont = clamp(round(s.runContinuous || (cr ? cr.km : Math.min(out.runLongestKm, 8)), 1), 3, 42.2);
+  out.notes.runCont = s.runContinuous ? 'your Settings value' : cr ? `${cr.raw} km without walking on ${cr.run.date} (${cr.run.why}) → potential ${cr.km} km (×${Math.round(cr.run.factor * 100) / 100})${cr.withWalk ? ` · ${cr.withWalk} recent run${cr.withWalk > 1 ? 's' : ''} with walk breaks` : ''}` : 'no run data';
   return out;
 }
 

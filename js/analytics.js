@@ -204,7 +204,7 @@ export const flatPowerSeries = gradedPowerSeries;
 //      (no usable HR → 68 %, a typical long-ride intensity)
 // Median of the up to 4 longest recent rides.
 export const LONG_RIDE_SEC = 2.5 * 3600;
-function flatSpeedFor(P, m) { let lo = 1, hi = 20; for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (physicsPower(mid, 0, m) > P) hi = mid; else lo = mid; } return lo; }
+export function flatSpeedFor(P, m) { let lo = 1, hi = 20; for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (physicsPower(mid, 0, m) > P) hi = mid; else lo = mid; } return lo; }
 export function outdoorFtpEstimate(acts, s) {
   const from = isoDate(addDays(new Date(), -183));
   const m = (s.weightKg || 75) + 9;
@@ -295,16 +295,29 @@ export function easyPaceNow(acts, endIso) {
 }
 
 // ---- how far can the athlete run without walking -----------------------------------------
+// Continuous run: longest stretch without walking (> 2 min slower than 9:00/km), then EXTRAPOLATED
+// from how that stretch ended:
+//   fatigue = max(pace decay ÷ 6 %, HR drift ÷ 8 %)   (first vs last third of the stretch)
+//   fatigue < 1 (still fresh at the end) → potential = km × (1 + 0.6·(1 − fatigue))   up to +60 %
+//   fatigue ≥ 1 (clearly fading)         → potential = km × (1 − 0.1·min(1, fatigue − 1)) down to −10 %
+//   stretches < 20 min or without streams: km × 1.0
+// Result: the best potential of the last `days`.
+export function runExtrapolation(km, f) {
+  if (!f) return { factor: 1, why: 'no stream data to judge fatigue' };
+  const fat = Math.max(Math.max(0, f.decay) / 0.06, f.drift != null ? Math.max(0, f.drift) / 0.08 : 0);
+  const factor = fat < 1 ? 1 + 0.6 * (1 - fat) : 1 - 0.1 * Math.min(1, fat - 1);
+  return { factor, fat, why: `pace ${f.decay >= 0 ? '−' : '+'}${Math.abs(Math.round(f.decay * 1000) / 10)} %, HR drift ${f.drift != null ? Math.round(f.drift * 1000) / 10 + ' %' : 'n/a'} over the last third` };
+}
 export function continuousRun(acts, days = 56) {
   const from = isoDate(addDays(new Date(), -days));
   const res = [];
   for (const a of acts) {
     if (a.sport !== 'run' || a.date < from || a.movingSec < 600) continue;
     const st = cachedStreams(a.id);
-    if (st) { const c = longestContinuousRun(st); if (c) res.push({ km: c.km, walkMin: c.walkMin, date: a.date, name: a.name, src: 'streams' }); }
-    else if (a.distanceM && a.paceSecKm && a.paceSecKm < 540) res.push({ km: a.distanceM / 1000 * 0.9, walkMin: null, date: a.date, name: a.name, src: 'average' });
+    if (st) { const c = longestContinuousRun(st); if (c) { const x = runExtrapolation(c.km, c.fatigue); res.push({ km: c.km, potential: c.km * x.factor, factor: x.factor, why: x.why, walkMin: c.walkMin, date: a.date, name: a.name, src: 'streams' }); } }
+    else if (a.distanceM && a.paceSecKm && a.paceSecKm < 540) res.push({ km: a.distanceM / 1000 * 0.9, potential: a.distanceM / 1000 * 0.9, factor: 1, why: 'no stream data', walkMin: null, date: a.date, name: a.name, src: 'average' });
   }
   if (!res.length) return null;
-  const best = res.reduce((m, r) => r.km > m.km ? r : m, res[0]);
-  return { km: Math.round(best.km * 10) / 10, run: best, runs: res.length, withWalk: res.filter(r => r.walkMin > 2).length };
+  const best = res.reduce((m, r) => r.potential > m.potential ? r : m, res[0]);
+  return { km: Math.round(best.potential * 10) / 10, raw: Math.round(best.km * 10) / 10, run: best, runs: res.length, withWalk: res.filter(r => r.walkMin > 2).length };
 }

@@ -157,15 +157,43 @@ export function runMask(st) {
 export function longestContinuousRun(st) {
   const mask = runMask(st);
   if (!mask || !st.dist) return null;
-  let best = 0, start = null;
+  let best = 0, start = null, bs = 0, be = 0;
   for (let i = 0; i <= st.n; i++) {
     const on = i < st.n && mask[i];
     if (on && start == null) start = i;
-    if (!on && start != null) { best = Math.max(best, (st.dist[i - 1] ?? 0) - (st.dist[start] ?? 0)); start = null; }
+    if (!on && start != null) { const d = (st.dist[i - 1] ?? 0) - (st.dist[start] ?? 0); if (d > best) { best = d; bs = start; be = i - 1; } start = null; }
   }
   const walkSec = mask.reduce((a, m, i) => a + (m ? 0 : 1), 0);
-  return { km: best / 1000, walkMin: Math.round(walkSec / 60) };
+  return { km: best / 1000, walkMin: Math.round(walkSec / 60), fatigue: fatigueProfile(st, bs, be, mask) };
 }
+// Pace decay and HR drift over one continuous stretch: first third vs last third (first 5 min skipped).
+//   decay = how much slower the last third was (grade-adjusted with altitude when available)
+//   drift = Pa:HR decoupling (speed per heartbeat, first vs last third)
+export function fatigueProfile(st, s0, e0, mask) {
+  if (!st?.speed || e0 - s0 < 1200) return null;
+  let s = s0; while (s < e0 && (st.time[s] - st.time[s0]) < 300) s++;
+  const n = e0 - s; if (n < 900) return null;
+  const third = Math.floor(n / 3);
+  const seg = (a, b) => {
+    let v = 0, h = 0, c = 0, ch = 0;
+    for (let i = a; i < b; i++) {
+      if (mask && !mask[i]) continue; const sp = st.speed[i]; if (!(sp > 1.5)) continue;
+      v += sp; c++;
+      if (st.hr?.[i]) { h += st.hr[i]; ch++; }
+    }
+    if (!c) return null;
+    // net gradient of this third (altitude change ÷ distance) — robust against altitude noise
+    let g = 0; if (st.alt && st.dist) { const dd = (st.dist[b - 1] ?? 0) - (st.dist[a] ?? 0); if (dd > 200) g = ((st.alt[b - 1] ?? 0) - (st.alt[a] ?? 0)) / dd; }
+    g = clampN(g, -0.05, 0.05);
+    return { v: (v / c) * (1 + g * (g > 0 ? 3.3 : 1.8)), hr: ch ? h / ch : null };   // uphill ~3.3 %, downhill ~1.8 % pace per 1 % grade
+  };
+  const A = seg(s, s + third), B = seg(e0 - third, e0);
+  if (!A || !B) return null;
+  const decay = (A.v - B.v) / A.v;                                 // + = slowed down
+  const drift = A.hr && B.hr ? ((A.v / A.hr) - (B.v / B.hr)) / (A.v / A.hr) : null;
+  return { decay, drift, min: Math.round((st.time[e0] - st.time[s]) / 60) };
+}
+const clampN = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // Easy (Z2) pace for ONE run — every run gets a value:
 //  1) median pace of 30-s windows with HR in Z2 (running only, after 3 min)          → 'z2'

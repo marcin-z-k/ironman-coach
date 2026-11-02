@@ -25,6 +25,12 @@ async function get(path, params = {}) {
   return res.json();
 }
 
+// Older activities (for the all-history baseline of the goal rings).
+export async function fetchActivitiesRange(oldest, newest) {
+  if (load().demo) return [];
+  return ((await get('/activities', { oldest, newest })) || []).map(normalizeActivity).filter(Boolean);
+}
+
 export async function fetchAll({ days = 150, wellnessDays = 200 } = {}) {
   const s = load();
   const today = new Date();

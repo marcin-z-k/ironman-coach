@@ -3,6 +3,8 @@
 // device doesn't provide one; VO2max is estimated from eFTP when no device value exists.
 import { el, esc, fmtDate, round, clamp, isoDate, addDays, parseDate } from './util.js';
 import { load } from './store.js';
+import { barChart } from './charts.js';
+import { readiness as liveReadiness, sleepCoach, fmtH } from './recovery.js';
 
 const h = (x) => el(x);
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
@@ -116,7 +118,8 @@ export function renderWidgets(data, ui) {
   for (const key of WIDGETS) {
     const M = METRICS[key];
     const ser = M.series(well, acts);
-    const p = latest(ser.pts, key === 'vo2max' ? 30 : 4);
+    let p = latest(ser.pts, key === 'vo2max' ? 30 : 4);
+    if (key === 'readiness') { const rd = liveReadiness(well, acts); if (rd && !rd.stale) p = { date: rd.date, v: rd.now }; }   // live: lowered by today's training
     const unit = ser.unit || M.unit;
     const st = p ? M.status(p.v, ser.unit, ser.pts, well) : ['', ''];
     const prev7 = mean(ser.pts.slice(-8, -1).map(x => x.v));
@@ -180,6 +183,7 @@ export function renderTrend(key, A, data, ui) {
     c.append(trendChart(hrs, { color: '#9b8cff' }, { unit: 'h' }, range, 'sleepHours'));
     root.append(c);
   }
+  if (key === 'sleep') root.append(...sleepCards(well, data?.activities || []));
   if (['fitness', 'fatigue', 'form'].includes(key)) {
     const rel = h('<div class="row" style="gap:8px"></div>');
     ['fitness', 'fatigue', 'form'].filter(k => k !== key).forEach(k => { const b = h(`<button class="btn secondary small" style="flex:1">${METRICS[k].label} ›</button>`); b.onclick = () => ui.openTrend(k); rel.append(b); });
@@ -241,4 +245,37 @@ function trendChart(pts, M, ser, range, key) {
   svgEl.addEventListener('pointermove', show); svgEl.addEventListener('pointerdown', show);
   svgEl.addEventListener('pointerleave', () => { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); });
   return wrap;
+}
+
+// ---- sleep coach + stats ---------------------------------------------------------------------
+function sleepCards(well, acts) {
+  const sc = sleepCoach(well, acts);
+  const hrsOf = w => w.sleepSecs ? w.sleepSecs / 3600 : null;
+  const last = n => well.slice(-n);
+  const avg = (arr, f) => { const v = arr.map(f).filter(x => x != null); return v.length ? mean(v) : null; };
+  const a7 = avg(last(7), hrsOf), a30 = avg(last(30), hrsOf), s7 = avg(last(7), w => w.sleepScore), s30 = avg(last(30), w => w.sleepScore);
+  const coach = h(`<div class="card hero" data-help-key="sleepcoach"><div class="card-title">Sleep coach</div>
+    <div class="row between"><div><div class="big mono" style="color:#9b8cff">${fmtH(sc.need)}</div><div class="small muted">Tonight's sleep need</div></div></div>
+    <div class="small muted" style="margin-top:10px;line-height:1.6">
+      Baseline ${fmtH(sc.base)}${sc.add ? ` + ${fmtH(sc.add)} for today's load (${Math.round(sc.tLoad)} TSS)` : ''}${sc.repay ? ` + ${fmtH(sc.repay)} to pay back sleep debt` : ''}.<br>
+      Sleep debt (last 7 nights): <b style="color:var(--text)">${sc.debt > 0.1 ? fmtH(sc.debt) : 'none'}</b> · nights that met the need: <b style="color:var(--text)">${sc.met}/${sc.known}</b></div>
+    <div class="nights">${sc.nights.map(n => { const pct = n.slept != null ? Math.min(1.15, n.slept / n.need) : 0; return `<div class="night" title="${n.date}"><div class="nb"><i style="height:${Math.round(pct / 1.15 * 100)}%;background:${n.slept == null ? 'transparent' : n.slept >= n.need - 0.25 ? 'var(--good)' : n.slept >= n.need - 1 ? 'var(--warn)' : 'var(--bad)'}"></i><s style="bottom:${Math.round(1 / 1.15 * 100)}%"></s></div><span>${fmtDate(n.date, { weekday: 'short' }).slice(0, 2)}</span><b>${n.slept != null ? round(n.slept, 1) : '–'}</b></div>`; }).join('')}</div>
+  </div>`);
+  const stats = h(`<div class="card" data-help-key="sleepstats"><div class="card-title">Sleep statistics</div>
+    <div class="trend-stats">
+      <div class="metric"><div class="v">${a7 != null ? round(a7, 1) + ' h' : '–'}</div><div class="k">Avg 7 nights</div></div>
+      <div class="metric"><div class="v">${a30 != null ? round(a30, 1) + ' h' : '–'}</div><div class="k">Avg 30 nights</div></div>
+      <div class="metric"><div class="v">${s7 != null ? Math.round(s7) : '–'}</div><div class="k">Score 7 n</div></div>
+      <div class="metric"><div class="v">${s30 != null ? Math.round(s30) : '–'}</div><div class="k">Score 30 n</div></div>
+    </div><div class="card-title" style="margin-top:14px">Weekly averages · last 12 weeks</div></div>`);
+  // weekly breakdown
+  const weeks = [];
+  for (let i = 11; i >= 0; i--) {
+    const end = isoDate(addDays(new Date(), -7 * i)), start = isoDate(addDays(parseDate(end), -6));
+    const wk = well.filter(w => w.date >= start && w.date <= end);
+    weeks.push({ start, h: avg(wk, hrsOf) || 0, sc: avg(wk, w => w.sleepScore) || 0 });
+  }
+  stats.append(barChart({ height: 150, cats: weeks.map(w => ({ label: fmtDate(w.start, { day: 'numeric', month: 'numeric' }), title: 'Week from ' + fmtDate(w.start) })), yFmt: v => round(v, 1) + ' h', series: [{ name: 'Hours', color: '#9b8cff', values: weeks.map(w => round(w.h, 1)) }] }));
+  if (weeks.some(w => w.sc)) stats.append(barChart({ height: 120, cats: weeks.map(w => ({ label: fmtDate(w.start, { day: 'numeric', month: 'numeric' }), title: 'Week from ' + fmtDate(w.start) })), yFmt: v => String(Math.round(v)), series: [{ name: 'Sleep score', color: '#58e39a', values: weeks.map(w => Math.round(w.sc)) }] }));
+  return [coach, stats];
 }
