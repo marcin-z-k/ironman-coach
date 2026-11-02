@@ -45,37 +45,86 @@ export function estimateBike(acts, cur, endIso, days = 42, s = {}) {
   //    → each ride's best effort, median of the best 3 rides                                   weight 0.6 (0.3 with 1 ride)
   // B) zone-2 envelope: 3-min blocks with HR in Z2, P ÷ %FTP(HR) → 80th percentile             weight 0.25
   // C) watts↔HR line read off at LTHR (only if the line is tight, r > 0.7)                      weight 0.15
-  // B) only efforts at or above the MIDDLE of zone 2 (≥ 65.5 % FTP) — below that, a few bpm of
-  //    sensor error or HR lag change the result too much
-  // C) each ride counts once (its best effort); reading = median of the best rides (needs ≥ 2 rides
-  //    for full weight)
+  // B) only efforts at or above the MIDDLE of zone 2 (≥ 65.5 % FTP)
+  // HR LAG: heart rate is read from the LAST 2 min of each effort; for efforts < 15 min the HR you
+  //   would have settled at is extrapolated from how fast it was still rising:
+  //   HRss = HR_end + τ · (dHR/dt over the last 2 min), τ = 90 s, capped at +10 bpm
+  // DURATION: every effort counts by its length — w = minutes ÷ 20 (5 min 0.25 · 8 min 0.4 ·
+  //   12 min 0.6 · 20 min 1.0 · max 2.0)
+  // REPEATS: within a ride, rep k of a set (similar power ±8 %) counts k× (later reps = settled HR,
+  //   tired legs). A set that shows fatigue — power fading 2–12 % from first to last rep, or HR
+  //   rising ≥ 5 bpm at the same power (ERG) — counts 1.25× more and adds a capacity reading:
+  //   FTP ≈ average rep power ÷ f(rep length), f = 1.05 (≤ 8 min) · 1.02 (≤ 12) · 1.00 (≤ 20) · 0.97
+  // RIDES: each ride gives one reading (weighted mean of its efforts); the estimate is the
+  //   weight-weighted mean of the 3 strongest rides of the last 6 weeks
   // spikes: short pushes (≤ 10 s, > 1.5× the 31-s median) are replaced before anything is computed
-  const effs = [], z2v = [], blocks = [];
+  const rideR = [], z2v = [], blocks = [];
   const z2 = hrZone2();
-  const MIN_PCT = 0.655;
+  const MIN_PCT = 0.655, TAU = 90;
   let spikeSec = 0;
   const wattsOf = new Map();
+  const endHr = (st, e) => {
+    const t1 = e.start + e.sec, t0 = Math.max(e.start, t1 - 120);
+    const pts = []; for (let k = t0; k < t1; k++) if (st.hr[k]) pts.push([st.time?.[k] ?? k, st.hr[k]]);
+    if (pts.length < 40) return null;
+    const mHr = pts.reduce((x, p) => x + p[1], 0) / pts.length;
+    const lr = linreg(pts.map(([t, hh]) => [t, hh]));
+    const slope = lr && lr.b > 0 ? lr.b : 0;                       // bpm per second
+    const hrEnd = mHr + slope * 60;                                 // value at the end of the window
+    const add = e.sec < 900 ? Math.min(10, TAU * slope) : 0;
+    return { hr: hrEnd + add, add, raw: mHr };
+  };
   for (const a of rides) {
     const st = cachedStreams(a.id); if (!st?.watts || !st.hr) continue;
     const W = despike(st.watts); spikeSec += W.removedSec || 0; wattsOf.set(a.id, W);
-    let best = null;
+    const effs = [];
     for (const e of steadyEfforts(W, st.hr, 300, 0.1)) {
-      if ((st.time?.[e.start] ?? e.start) < 300) continue;            // skip the first 5 min (warm-up, HR not settled)
-      const pct = hrToFtpPct(e.hr); if (!pct || pct < MIN_PCT) continue;
-      const r = { ftp: e.P / pct, P: e.P, hr: Math.round(e.hr), min: Math.round(e.sec / 60), date: a.date, pct };
-      if (!best || r.ftp > best.ftp) best = r;
+      if ((st.time?.[e.start] ?? e.start) < 300) continue;            // skip the first 5 min (warm-up)
+      const H = endHr(st, e); if (!H) continue;
+      const pct = hrToFtpPct(H.hr); if (!pct || pct < MIN_PCT) continue;
+      effs.push({ ftp: e.P / pct, P: e.P, hr: Math.round(H.hr), add: Math.round(H.add), min: e.sec / 60, pct, start: e.start });
     }
-    if (best) effs.push(best);
+    if (!effs.length) continue;
+    // group into sets of similar power (in order)
+    const sets = [];
+    for (const e of effs.sort((x, y) => x.start - y.start)) {
+      const last = sets[sets.length - 1];
+      if (last && Math.abs(e.P / last[0].P - 1) <= 0.08) last.push(e); else sets.push([e]);
+    }
+    let ws = 0, vs = 0, tired = false, capR = null, desc = [];
+    for (const set of sets) {
+      let fade = 0, drift = 0, isTired = false;
+      if (set.length >= 2) {
+        fade = (set[0].P - set[set.length - 1].P) / set[0].P;
+        drift = set[set.length - 1].hr - set[0].hr;
+        isTired = (fade >= 0.02 && fade <= 0.12) || (drift >= 5 && fade >= -0.01);
+      }
+      set.forEach((e, k) => { const w = Math.min(2, e.min / 20) * (k + 1) * (isTired ? 1.25 : 1); ws += w; vs += w * e.ftp; });
+      if (isTired) {
+        const repMin = set.reduce((x, e) => x + e.min, 0) / set.length;
+        const f = repMin <= 8 ? 1.05 : repMin <= 12 ? 1.02 : repMin <= 20 ? 1.0 : 0.97;
+        const cap = set.reduce((x, e) => x + e.P, 0) / set.length / f;
+        const w = Math.min(2, set.reduce((x, e) => x + e.min, 0) / 20) * 1.25;
+        ws += w; vs += w * cap; tired = true; capR = Math.round(cap);
+      }
+      desc.push(`${set.length}× ${Math.round(set.reduce((x, e) => x + e.min, 0) / set.length)} min @ ${Math.round(set.reduce((x, e) => x + e.P, 0) / set.length)} W, HR ${set.map(e => e.hr).join('/')}${set.some(e => e.add) ? ' (lag-corrected)' : ''}${isTired ? `, fatigue (${fade >= 0.02 ? `power −${Math.round(fade * 100)} %` : `HR +${Math.round(drift)} bpm`})` : ''}`);
+    }
+    rideR.push({ ftp: vs / ws, w: ws, date: a.date, desc: desc.join('; '), tired, capR });
+  }
+  if (rideR.length) {
+    const top = rideR.slice().sort((x, y) => y.ftp - x.ftp).slice(0, 3);
+    const v = top.reduce((x, r) => x + r.ftp * r.w, 0) / top.reduce((x, r) => x + r.w, 0);
+    const one = rideR.length < 2;
+    const b0 = top[0];
+    methods.push({ key: 'efforts', label: 'Steady efforts ≥ 5 min', value: Math.round(v), weight: one ? 0.3 : 0.6, detail: `best ride ${b0.date}: ${b0.desc} → ${Math.round(b0.ftp)} W${b0.capR ? ` (incl. capacity ${b0.capR} W)` : ''} · ${top.length} of ${rideR.length} rides used, longer efforts and later reps count more${one ? ' — only 1 ride, half weight' : ''}${spikeSec ? ` · ${spikeSec} s of power spikes ignored` : ''}` });
+  }
+  for (const a of rides) {
+    const st = cachedStreams(a.id); if (!st?.watts || !st.hr) continue;
+    const W = wattsOf.get(a.id);
     const ok = W.map(w => w != null && w > 30);
     const bl = steadyBlocks(W, st.hr, st.time, ok);
     blocks.push(...bl);
     if (z2) for (const [h, w] of bl) if (h >= z2[0] - 2 && h <= z2[1] + 2) { const pct = hrToFtpPct(h); if (pct) z2v.push(w / pct); }
-  }
-  if (effs.length) {
-    const top = effs.slice().sort((x, y) => y.ftp - x.ftp).slice(0, 3);
-    const b0 = top[0];
-    const one = effs.length < 2;
-    methods.push({ key: 'efforts', label: 'Steady efforts ≥ 5 min', value: Math.round(median(top.map(e => e.ftp))), weight: one ? 0.3 : 0.6, detail: `best: ${Math.round(b0.P)} W for ${b0.min} min at ${b0.hr} bpm (= ${Math.round(b0.pct * 100)} % FTP) on ${b0.date} · best effort of ${effs.length} ride${one ? ' — only 1 ride, half weight' : 's'}${spikeSec ? ` · ${spikeSec} s of power spikes ignored` : ''}` });
   }
   if (z2v.length >= 3) { z2v.sort((x, y) => x - y); methods.push({ key: 'z2', label: 'Zone-2 watts (upper end)', value: Math.round(z2v[Math.floor(z2v.length * 0.8)]), weight: 0.25, detail: `80th percentile of ${z2v.length} zone-2 blocks, HR ${z2 ? z2.join('–') : ''} bpm` }); }
   if (L && blocks.length >= 8) {
