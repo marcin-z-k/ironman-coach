@@ -16,6 +16,7 @@ import { computeBaseline } from './targets.js';
 import { renderRaceDay, raceLocked } from './raceui.js';
 import { attachHelp } from './help.js';
 import { hasRealPower, singleFtp, calibrate } from './virtualpower.js';
+import { raceCalibration } from './analytics.js';
 import { fetchActivitiesRange } from './icu.js';
 import { el, esc } from './util.js';
 import { download } from './export.js';
@@ -279,6 +280,7 @@ function updateThresholds() {
         applyUpdates([{ field: 'ftp', from: s0.ftp, to: cal.anchorFtp, source: 'calibration from long outdoor rides' }], 'calibration');
     }
   }
+  { const rc = raceCalibration(data?.activities || [], load()); if (rc && JSON.stringify(rc) !== JSON.stringify(load().raceCal)) save({ raceCal: rc }); }
   // 2) estimates from recent activities (respecting holds)
   const est = estimateAll(data.activities || [], load(), todayIso);
   const props = proposeUpdates(est, load(), todayIso).filter(p => !icuChanges.some(c => c.field === p.field));
@@ -291,13 +293,17 @@ function updateThresholds() {
 let baselineBusy = false;
 async function ensureBaseline() {
   const s = load();
-  if (baselineBusy || !data?.activities || (s.baseline && s.baseline.v === 1)) return;
+  const missing = !s.baseline || s.baseline.v !== 1 || ['easy', 'runThreshold', 'ftp', 'css'].some(k => !s.baseline[k]);
+  if (baselineBusy || !data?.activities || !missing || (s.baseline?.v === 1 && s.baseline.at === isoDate(new Date()) && s.baseline.full)) return;
   baselineBusy = true;
   try {
     const older = await fetchActivitiesRange('2000-01-01', isoDate(addDays(new Date(), -149))).catch(() => []);
     const ids = new Set(data.activities.map(a => a.id));
     const all = data.activities.concat(older.filter(a => !ids.has(a.id)));
-    save({ baseline: computeBaseline(all, load()) });
+    const nb = computeBaseline(all, load()), old = load().baseline || {};
+    for (const k of ['easy', 'runThreshold', 'ftp', 'css']) if (old[k] && !nb[k]) nb[k] = old[k];       // keep what we had
+    nb.full = true;
+    save({ baseline: nb });
     A = null; render();
   } finally { baselineBusy = false; }
 }

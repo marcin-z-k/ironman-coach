@@ -37,8 +37,8 @@ export function raceDayPlan(A, s, acts) {
 
   // ---- bike
   if (D.bike) {
-    const ftp = (s.outdoorPower && s.ftpOutdoor) || ftpCoupling(acts, s).outdoorNow || s.ftpOutdoor || Math.round(s.ftp * 1.1);
-    const ftpLabel = ftpCoupling(acts, s).single ? 'FTP' : 'outdoor FTP';
+    const cpl = ftpCoupling(acts, s), ftp = cpl.raceFtp || s.ftp;
+    const ftpLabel = cpl.single ? 'FTP' : 'Race FTP';
     const hrs = p.bikeSec / 3600;
     const IF = clamp(0.95 * 0.97 * Math.pow(Math.max(0.5, hrs), -0.17), 0.6, 0.9);
     const P = ftp * IF, kmh = D.bike / hrs, z2 = hrZone2();

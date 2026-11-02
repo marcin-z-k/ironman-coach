@@ -1,7 +1,7 @@
 // Activity detail slide-over: summary metrics, route map, synced pace/HR/cadence/elevation charts,
 // execution score, aerobic decoupling, brick analysis, heat correction (EnviroNorm), zones, coach summary.
 import { el, esc, fmtDur, fmtKm, fmtDate, paceToStr, round, sportIcon, SPORT_LABEL } from './util.js';
-import { load } from './store.js';
+import { load, save } from './store.js';
 import { getStreams, downsample, decoupling, brickSplit } from './streams.js';
 import { streamChart } from './charts.js';
 import { getZoneModel, plannedDist } from './zones.js';
@@ -56,6 +56,12 @@ export function openActivity(a, ctx, ui) {
       ${a.indoor ? '<span class="pill">Indoor</span>' : ''}${a.race ? '<span class="pill accent">Race</span>' : ''}
       ${planned ? `<span class="pill">Plan: ${esc(planned.title)}</span>` : '<span class="pill">Not in the plan</span>'}
     </div>
+    ${ctx.options?.length ? `<div class="assign row" style="gap:8px;align-items:center;margin:-4px 0 12px"><span class="small muted">Counts for</span>
+      <select class="pred-sel assign-sel" style="flex:1;min-width:0">
+        <option value="auto" ${s.manualMatch?.[a.id] === undefined ? 'selected' : ''}>Automatic${planned && s.manualMatch?.[a.id] === undefined ? ` (${esc(planned.title)})` : ''}</option>
+        ${ctx.options.map(o => `<option value="${o.id}" ${s.manualMatch?.[a.id] === o.id ? 'selected' : ''} ${o.taken ? 'disabled' : ''}>${esc(o.label)}${o.taken ? ' — already done' : ''}</option>`).join('')}
+        <option value="none" ${s.manualMatch?.[a.id] === 'none' ? 'selected' : ''}>Not a planned session (extra)</option>
+      </select></div>` : ''}
     <div class="dmetrics">${cards.map(c => `<div class="metric"><div class="v">${esc(String(c[1]))}</div><div class="k">${c[0]}</div></div>`).join('')}</div>
     <div class="map-wrap" hidden><div class="map"></div></div>
     <div class="charts"><div class="muted small loading">Loading streams…</div></div>
@@ -72,6 +78,8 @@ export function openActivity(a, ctx, ui) {
   </div>`);
 
   node.querySelector('[data-close]').onclick = () => ui.closeSheet();
+  const asg = node.querySelector('.assign-sel');
+  if (asg) asg.onchange = (e) => { const m = { ...(load().manualMatch || {}) }; if (e.target.value === 'auto') delete m[a.id]; else m[a.id] = e.target.value; save({ manualMatch: m }); ui.toast('Assignment saved — plan updated'); ui.closeSheet(true); ui.invalidate(); };
   node.querySelector('.temp-in').onchange = (e) => { setTemp(a, e.target.value === '' ? null : +e.target.value); ui.closeSheet(true); ui.invalidate(); openActivity(a, ctx, ui); };
   // zones
   node.querySelector('.zones-d').innerHTML = zoneBars(a, planned);

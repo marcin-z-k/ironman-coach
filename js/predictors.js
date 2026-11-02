@@ -31,14 +31,14 @@ export function secondaryPredictions(cat, b, s, acts) {
   if (cat === 'swim') return SWIM.map(([label, m]) => { const p = predict(b, sGoal({ type: 'swim', swimM: m }), { wetsuit: false }); return { label, sec: p.swimSec, pace: p.swimSec / (m / 100), unit: '/100m', note: p.swim.cont < m ? `${Math.max(0, Math.floor(m / p.swim.cont - 1))} short stops` : '' }; });
   if (cat === 'bike' || cat.startsWith('bike_')) {
     const c = ftpCoupling(acts, s);
-    const ftp = (s.outdoorPower && s.ftpOutdoor) || c.outdoorNow || s.ftpOutdoor || Math.round(s.ftp * 1.1);
+    const ftp = c.raceFtp || s.ftp;
     const m = (s.weightKg || 75) + 9;
     const list = cat === 'bike' ? BIKE : [['', +cat.slice(5)]];
     return list.map(([label, km]) => {
       let t = km / 30;                                    // hours, iterate
       let P = 0, v = 0;
       for (let i = 0; i < 8; i++) { const IF = Math.min(1.0, 0.97 * Math.pow(Math.max(0.3, t), -0.17)); P = ftp * IF; v = flatSpeedFor(P, m); t = km * 1000 / v / 3600; }
-      return { label, sec: t * 3600, kmh: Math.round(v * 36) / 10, unit: 'km/h', note: `${Math.round(P)} W (${Math.round(P / ftp * 100)} % of ${ftp} W ${c.single ? 'FTP' : 'outdoor FTP'}), flat` };
+      return { label, sec: t * 3600, kmh: Math.round(v * 36) / 10, unit: 'km/h', note: `${Math.round(P)} W (${Math.round(P / ftp * 100)} % of ${ftp} W ${c.single ? 'FTP' : 'Race FTP'}), flat` };
     });
   }
   if (cat === 'tri') {

@@ -334,7 +334,9 @@ export function renderActivities(A, ui, data) {
         <div class="right badges">${sc ? scoreBadge(sc) : ''}${summaryBadge(getSummary(a) || ruleSummary(a, { planned, wellness: A.wellness }))}</div></div>
     </button>`);
     card.onclick = () => {
-      const ctx = { planned, wellness: A.wellness, phase: (A.plan.weeks.find(w => a.date >= w.start && a.date <= w.end) || {}).phase, weeksLeft: A.goal.weeksLeft, compliance14: A.compliance.c14.ratio != null ? Math.round(A.compliance.c14.ratio * 100) : null };
+      const wk = A.plan.weeks.find(w => a.date >= w.start && a.date <= w.end);
+      const options = wk ? wk.sessions.filter(x => x.kind !== 'race' && (x.sport === 'brick' ? 'run' : x.sport) === a.sport).map(x => ({ id: x.id, label: `${fmtDate(x.origDate || x.date, { weekday: 'short' })} · ${x.title}`, taken: !!A.matches[x.id] && A.matches[x.id].id !== a.id })) : [];
+      const ctx = { options, planned, wellness: A.wellness, phase: (A.plan.weeks.find(w => a.date >= w.start && a.date <= w.end) || {}).phase, weeksLeft: A.goal.weeksLeft, compliance14: A.compliance.c14.ratio != null ? Math.round(A.compliance.c14.ratio * 100) : null };
       openActivity(a, ctx, ui);
     };
     root.append(card);
@@ -366,12 +368,12 @@ function simEstimates(s, b, acts) {
   return { ftp: outdoorFtpNow(acts, s), css: s.css, thr: s.runThreshold, swimCont: b.swimCont, runCont: round(b.runCont, 1), at: isoDate(new Date()) };
 }
 // The race bike course is outdoors → the simulator works with your OUTDOOR FTP.
-function outdoorFtpNow(acts, s) { if (singleFtp(s)) return s.ftp; if (s.outdoorPower && s.ftpOutdoor) return s.ftpOutdoor; const c = ftpCoupling(acts, s); return c.outdoorNow || s.ftpOutdoor || s.ftp; }
+function outdoorFtpNow(acts, s) { if (singleFtp(s)) return s.ftp; const rf = ftpCoupling(acts, s).raceFtp; if (rf) return rf; if (s.outdoorPower && s.ftpOutdoor) return s.ftpOutdoor; const c = ftpCoupling(acts, s); return c.outdoorNow || s.ftpOutdoor || s.ftp; }
 function simulatorCard(A, ui, acts = []) {
   let s = load();
   const b = A.goal.base;
   const est = simEstimates(s, b, acts);
-  if (!s.sim || !s.sim.outdoorFtp) s = save({ sim: { wetsuit: true, ...(s.sim || {}), ftp: est.ftp, outdoorFtp: true } });   // one-time switch to outdoor FTP
+  if (!s.sim || !s.sim.raceFtp) s = save({ sim: { wetsuit: true, ...(s.sim || {}), ftp: est.ftp, outdoorFtp: true, raceFtp: true } });   // one-time switch to Race FTP   // one-time switch to outdoor FTP
   const d = { ...est, wetsuit: true, ...s.sim };        // stored user values win
   const ftpRef = est.ftp;                               // bike speed b.bikeKmh comes from outdoor rides = current outdoor FTP
   const persist = () => { save({ sim: { ...d } }); };
@@ -389,7 +391,7 @@ function simulatorCard(A, ui, acts = []) {
       <div class="metric"><div class="v" data-o="trans"></div><div class="k">Transitions</div></div>
     </div>
     <div class="sliders">
-      ${slider('ftp', singleFtp(s) ? 'Bike FTP' : 'Bike FTP (outdoor)', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
+      ${slider('ftp', singleFtp(s) ? 'Bike FTP' : 'Race FTP', lo('ftp', est.ftp - 40), hi('ftp', est.ftp + 100), 1)}
       ${slider('css', 'Swim CSS', lo('css', est.css - 20), hi('css', est.css + 15), 1)}
       ${slider('thr', 'Run threshold', lo('thr', est.thr - 90), hi('thr', est.thr + 30), 1)}
       ${slider('swimCont', 'Continuous swim', 100, Math.max(4000, D0g(s).swim, d.swimCont), 100)}
@@ -400,7 +402,7 @@ function simulatorCard(A, ui, acts = []) {
     <details class="more" style="margin-top:10px"><summary>How this is calculated</summary><div class="small muted" style="line-height:1.55">
       Slider values are yours and are kept across syncs and app updates. <b>Estimate</b> replaces the sliders with the current estimates; the wetsuit switch is only ever changed by you.<br>
       <b>Swim</b> — your pool session pace (${esc(b.notes.swim)}). Continuous swim estimate: ${esc(b.notes.swimCont || '')} — pauses at the wall shorter than 2 min don't count as breaks. Beyond that distance pace fades ~8% per doubling and each forced stop costs ~25 s. Wetsuit −5%.<br>
-      <b>Bike</b> — speed of your long outdoor rides (${esc(b.notes.bike)}), +2% race day. The slider is your <b>outdoor</b> FTP (race course is outdoors; now ${est.ftp} W); changes scale speed with the cube root of power.<br>
+      <b>Bike</b> — speed of your long outdoor rides (${esc(b.notes.bike)}), +2% race day. The slider is your <b>Race FTP</b> (indoor FTP × your outdoor/indoor discrepancy; now ${est.ftp} W); changes scale speed with the cube root of power.<br>
       <b>Run</b> — easy pace at Z2 HR (${esc(b.notes.run)}), +6% off the bike. Continuous run estimate: ${esc(b.notes.runCont || '')}. Stretches slower than 9:00/km for over 2 min count as walking (short GPS glitches don't). Beyond that distance: run/walk at 1.35× easy pace. Moving the run threshold shifts easy pace by the same amount.<br>
       <b>Transitions</b> 12 min.</div></details>
   </div>`);
@@ -448,7 +450,7 @@ function simulatorCard(A, ui, acts = []) {
   };
   card.querySelectorAll('input[type=range]').forEach(inp => { inp.value = d[inp.dataset.k]; inp.oninput = () => { d[inp.dataset.k] = +inp.value; update(); }; inp.onchange = persist; });
   const ws = card.querySelector('[data-k="wetsuit"]'); if (ws) ws.onchange = (e) => { d.wetsuit = e.target.checked; persist(); update(); };
-  card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b, acts), wetsuit: d.wetsuit, outdoorFtp: true } }); ui.keepScroll(); ui.rerender(); };   // wetsuit stays yours
+  card.querySelector('[data-est]').onclick = () => { save({ sim: { ...simEstimates(load(), b, acts), wetsuit: d.wetsuit, outdoorFtp: true, raceFtp: true } }); ui.keepScroll(); ui.rerender(); };   // wetsuit stays yours
   update();
   return card;
 }
@@ -598,19 +600,20 @@ function splitCard(acts) {
 function couplingCard(acts, ui) {
   const s = load();
   const c = ftpCoupling(acts, s);
-  const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Bike FTP · indoor ↔ outdoor</div><button class="btn ghost small" data-recal>Recalibrate</button></div></div>`);
-  card.querySelector('[data-recal]').onclick = () => { save({ ftpCoupling: null }); ui.toast('Recalibrating outdoor/indoor ratio'); ui.invalidate(); };
+  const card = h(`<div class="card"><div class="row between"><div class="card-title" style="margin:0">Bike FTP · indoor · outdoor · race</div><button class="btn ghost small" data-recal>Recalibrate</button></div></div>`);
+  card.querySelector('[data-recal]').onclick = () => { save({ ftpCoupling: null, raceCal: null }); ui.toast('Re-measuring the outdoor/indoor discrepancy'); ui.invalidate(); };
   if (!c.ratio) { card.append(h(`<div class="small muted" style="margin-top:8px">Needs an outdoor ride of 2.5 h or longer in the last 6 months (or an outdoor FTP in Settings). Outdoor FTP comes from your long rides: average speed adjusted for the climbing → zone-2 power → scaled up to FTP by your heart rate.</div>`)); return card; }
   const pct = Math.round((c.ratio - 1) * 100);
   card.append(h(`<div><div class="dmetrics" style="margin-top:10px">
       <div class="metric"><div class="v" style="color:var(--bike)">${s.ftp} W</div><div class="k">Indoor FTP</div></div>
-      <div class="metric"><div class="v">${c.outdoorNow} W</div><div class="k">Outdoor FTP (${pct >= 0 ? '+' : ''}${pct}%)</div></div>
-      <div class="metric"><div class="v" style="color:var(--accent)">${c.target} W</div><div class="k">Race target outdoor</div></div>
+      <div class="metric"><div class="v">${c.outdoorEst ? c.outdoorEst + ' W' : '–'}</div><div class="k">Outdoor FTP${c.est ? ' (long rides)' : ''}</div></div>
+      <div class="metric"><div class="v" style="color:var(--accent)">${c.raceFtp} W</div><div class="k">Race FTP (indoor ${pct >= 0 ? '+' : ''}${c.discrepancy} %)</div></div>
+      <div class="metric"><div class="v">${c.target} W</div><div class="k">Race target</div></div>
     </div>
     <div style="margin-top:14px"><div class="row between small"><span>Indoor target to reach ${c.target} W outdoors: <b>${c.indoorTarget} W</b></span><b>${Math.round(c.progress * 100)}%</b></div>
       <div class="progress glow"><span style="width:${Math.min(100, c.progress * 100)}%"></span></div>
-      <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Ratio calibrated ${c.calib.date ? fmtDate(c.calib.date, { day: 'numeric', month: 'short' }) + ' ' : ''}from ${esc(c.calib.source)}${c.est && c.calib.source === 'your outdoor FTP' ? ` · automatic outdoor estimate: ${c.est.ftp} W` : ''}. As indoor FTP rises, the outdoor value scales with the same ratio.</div></div>
-    ${c.ratio > 1.4 && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting). If it looks wrong, enter your outdoor FTP baseline in Settings.</div></div>` : ''}</div>`));
+      <div class="small faint" style="margin-top:6px">${c.indoorTarget - s.ftp > 0 ? `${c.indoorTarget - s.ftp} W to go on the trainer.` : 'Target reached!'} Discrepancy from ${esc(c.calib.source)}. Race FTP = indoor FTP × ${round(c.ratio, 3)} — it moves with every indoor FTP change and is used for the projected finish, the race predictors and Race Day pacing.</div></div>
+    ${c.ratio > 1.4 && !c.calib.manual && c.calib.source !== 'your outdoor FTP' ? `<div class="adjust-banner" style="margin-top:10px"><span>!</span><div><strong>Outdoor estimate is ${Math.round((c.ratio - 1) * 100)}% above indoor.</strong> Speed-based estimates run high when you ride in a group (drafting). If it looks wrong, set the discrepancy in Settings.</div></div>` : ''}</div>`));
   if (c.est?.rides?.length) card.append(h(`<details class="more" style="margin-top:10px"><summary>Long rides used (${c.est.rides.length})</summary><div class="small muted" style="line-height:1.6">${c.est.rides.map(r => `${fmtDate(r.date, { day: 'numeric', month: 'short' })} · ${r.km} km @ ${r.kmh} km/h${r.gain != null ? `, ${Math.round(r.gain)} hm` : ''} → ${r.adjKmh} km/h flat-equivalent ≈ <b style="color:var(--text)">${Math.round(r.P)} W</b>${r.hr ? ` at ${r.hr} bpm` : ''} = ${Math.round(r.pct * 100)}% → <b style="color:var(--text)">${Math.round(r.ftp)} W</b>`).join('<br>')}<br><span class="faint">Power from speed: air resistance ½·ρ·CdA·v³ (CdA 0.35, grows with the cube of speed) + rolling resistance + climbing (half recovered on descents). Median of the rides = ${c.est.ftp} W.</span></div></details>`));
   return card;
 }
@@ -655,6 +658,7 @@ export function renderSettings(ui, onSave) {
 
       <div class="card-title" style="margin-top:8px">Race day & predictions</div>
       <label class="switch-row"><span><b>Hide Main Race Prediction</b><span class="hint" style="display:block">Hides the "Projected finish" box on Progress (less pressure before race day). Race predictors at the bottom stay.</span></span><input type="checkbox" class="ios" name="hideMainPrediction" ${s.hideMainPrediction ? 'checked' : ''}></label>
+      <label class="switch-row"><span><b>Always show Race Day tab</b><span class="hint" style="display:block">Unlocks the Race Day tab now instead of 2 weeks before the race.</span></span><input type="checkbox" class="ios" name="raceDayForce" ${s.raceDayForce ? 'checked' : ''}></label>
       <label class="switch-row"><span><b>Hide Race Day icon until 2 weeks before race</b><span class="hint" style="display:block">Off: the tab is visible but greyed out until then.</span></span><input type="checkbox" class="ios" name="hideRaceDayIcon" ${s.hideRaceDayIcon ? 'checked' : ''}></label>
       <label class="switch-row"><span><b>${s.raceSupported === false ? 'Unsupported race' : 'Supported race'}</b><span class="hint" style="display:block">On: aid stations (drinks, water) along the course. Off: you carry all food and fluids.</span></span><input type="checkbox" class="ios" name="raceSupported" ${s.raceSupported === false ? '' : 'checked'}></label>
       <div class="grid2">
@@ -679,6 +683,7 @@ export function renderSettings(ui, onSave) {
         ${singleFtp(s) ? `<div class="field"><label>FTP, W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">One FTP — no power meter recorded yet. Tracked from your long outdoor rides and from speed + heart rate on the trainer.</div></div>
         <div class="field"><label>Indoor trainer type</label><select name="trainerType">${Object.entries(TRAINERS).map(([k, v]) => `<option value="${k}" ${(s.trainerType || 'unknown') === k ? 'selected' : ''}>${v}</option>`).join('')}</select><div class="hint">Shapes the speed→power curve for trainer rides without power.</div></div>` : `<div class="field"><label>Indoor FTP (trainer), W</label><input name="ftp" type="number" min="60" max="500" value="${s.ftp}"><div class="hint">Your indoor Z2 = ${Math.round(s.ftp * 0.56)}–${Math.round(s.ftp * 0.75)} W.</div></div>
         <div class="field"><label>Outdoor FTP baseline, W</label><input name="ftpOutdoor" type="number" min="60" max="500" value="${s.ftpOutdoor || ''}" placeholder="auto"><div class="hint">Blank = estimated from speed + HR. Sets the indoor↔outdoor ratio.</div></div>`}
+        ${singleFtp(s) ? '' : `<div class="field"><label>Outdoor vs indoor discrepancy, %</label><input name="ftpDiscrepancy" type="number" step="0.5" min="-40" max="60" value="${s.ftpDiscrepancy ?? ''}" placeholder="auto${(() => { const c = ftpCoupling(ui.data?.activities || [], { ...s, ftpDiscrepancy: null }); return c.discrepancy != null ? ' (' + (c.discrepancy > 0 ? '+' : '') + c.discrepancy + ' %)' : ''; })()}"><div class="hint">Discrepancy (%) = Outdoor FTP − Indoor FTP. Race FTP = Indoor FTP × (1 + discrepancy). Blank = measured from your long outdoor rides.</div></div>`}
         <div class="field"><label>${singleFtp(s) ? 'Race target FTP, W' : 'Race target outdoor FTP, W'}</label><input name="raceTargetW" type="number" min="100" max="500" value="${s.raceTargetW || 230}"></div>
       </div>
       <div class="field"><label class="toggle"><input type="checkbox" name="outdoorPower" ${s.outdoorPower ? 'checked' : ''}> I have a power meter on my outdoor bike</label><div class="hint">Off: outdoor rides are prescribed and judged by heart rate; estimated (Strava) watts are ignored.</div></div>
@@ -687,6 +692,7 @@ export function renderSettings(ui, onSave) {
       <div class="grid2">
         <div class="field"><label>Run threshold pace (min/km)</label><input name="runThreshold" value="${paceToStr(s.runThreshold)}" placeholder="5:40"></div>
         <div class="field"><label>Swim CSS (min/100m)</label><input name="css" value="${paceToStr(s.css)}" placeholder="1:50"></div>
+        <div class="field"><label>CSS target (min/100m)</label><input name="cssTarget" value="${paceToStr(s.cssTarget || 120)}" placeholder="2:00"><div class="hint">Goal for the Swim CSS ring and status (default 2:00 = Ironman swim pace).</div></div>
         <div class="field"><label>Longest swim without stopping (m)</label><input name="swimContinuous" type="number" min="50" max="10000" step="50" value="${s.swimContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Longest run without walking (km)</label><input name="runContinuous" type="number" min="1" max="42.2" step="0.5" value="${s.runContinuous || ''}" placeholder="auto"></div>
         <div class="field"><label>Weight (kg)</label><input name="weightKg" type="number" min="40" max="150" value="${s.weightKg}"></div>
@@ -767,6 +773,7 @@ export function renderSettings(ui, onSave) {
       swimContinuous: +fd.get('swimContinuous') || null, runContinuous: +fd.get('runContinuous') || null,
       thresholdSource: fd.get('thresholdSource'), demo: fd.get('demo') === 'on', weekTemplate: tpl.length ? tpl : null,
       planSource: fd.get('planSource') || 'default', indoorMode: fd.get('indoorMode') === 'on',
+      ftpDiscrepancy: fd.has('ftpDiscrepancy') ? (fd.get('ftpDiscrepancy') === '' ? null : +fd.get('ftpDiscrepancy')) : s.ftpDiscrepancy ?? null, cssTarget: strToPace(fd.get('cssTarget')) || 120, raceDayForce: fd.get('raceDayForce') === 'on',
       hideMainPrediction: fd.get('hideMainPrediction') === 'on', hideRaceDayIcon: fd.get('hideRaceDayIcon') === 'on', raceSupported: fd.get('raceSupported') === 'on',
       gelCarbs: +fd.get('gelCarbs') || 25, gelSodium: +(fd.get('gelSodium') ?? 50), bottleMl: +fd.get('bottleMl') || 750, bottleCarbs: +(fd.get('bottleCarbs') ?? 60), bottleSodium: +(fd.get('bottleSodium') ?? 300), saltCapMg: +fd.get('saltCapMg') || 250, sleepBaseH: +fd.get('sleepBaseH') || 8,
       goal: fd.get('planSource') === 'custom' ? s.goal : { type: fd.get('goalType'), tri: fd.get('goalTri'), runKm: +fd.get('goalRunKm') || 42.195, bikeKm: +fd.get('goalBikeKm') || 100, bikeHm: +fd.get('goalBikeHm') || 0, swimM: +fd.get('goalSwimM') || 3800 },
@@ -883,7 +890,7 @@ function targetCards(data, ui) {
         ${e.hint ? `<div class="small" style="color:var(--warn)">${esc(e.hint)}</div>` : ''}${e.info ? `<div class="small faint">${esc(e.info)}</div>` : ''}
         ${e.methods.length ? `<div class="small faint">${e.methods.map(m => `${esc(m.label)}: ${T.fmt(m.value)} <span class="faint">(${esc(m.detail)})</span>`).join(' · ')}</div>` : '<div class="small faint">Not enough suitable activities in the last 6 weeks.</div>'}`;
     }
-    const b = base[k];
+    const b = base[k] || (pts.length ? { value: (roll || pts)[0].y, date: pts[0].x, provisional: true } : (cur != null && k !== 'easy' && s[k] ? { value: s[k], date: today, provisional: true } : null));
     const pct = b ? progress(k, cur, b.value, t.target) : null;
     const st = b ? status(k, cur, b.value, b.date, t.target, s.raceDate, today) : null;
     const card = h(`<div class="card tg-card" data-help-key="tg-${k}${k === 'ftp' && one ? '1' : ''}">

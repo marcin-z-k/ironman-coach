@@ -4,7 +4,7 @@ import { load, save } from './store.js';
 import { raceDayPlan, exportRaceFit } from './raceday.js';
 
 const h = (x) => el(x);
-export const raceLocked = (s = load()) => daysBetween(today(), s.raceDate) > 14;
+export const raceLocked = (s = load()) => !s.raceDayForce && daysBetween(today(), s.raceDate) > 14;
 
 const COL = { gel: '#ff6a3d', salt: '#e8ecf3', drink: '#4cc3ff' };
 

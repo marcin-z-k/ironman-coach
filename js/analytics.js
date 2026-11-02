@@ -253,18 +253,35 @@ export function continuousSwim(acts, days = 56) {
   return { m: Math.max(50, est), swims: list.length, list, date: list[0].date };
 }
 
+// FTP coupling + RACE FTP.
+//   Outdoor FTP  = estimate from your long outdoor rides (or a power meter / your Settings value)
+//   discrepancy  = Settings value (%), or measured: outdoor FTP ÷ indoor FTP at the time of those
+//                  rides (stored in raceCal, re-measured only when new long rides change the estimate)
+//   Race FTP     = indoor FTP × (1 + discrepancy) — follows every indoor FTP change
+//   Used for: projected finish, race predictors (bike), Race Day pacing.
 export function ftpCoupling(acts, s) {
   const target = s.raceTargetW || 230;
-  if (singleFtp(s)) return { target, single: true, ratio: 1, outdoorNow: s.ftp, indoorTarget: target, progress: s.ftp / target, est: null };
-  // Only a value YOU entered freezes the ratio; automatic estimates are recalculated on every sync.
-  let c = s.ftpCoupling?.source === 'your outdoor FTP' ? s.ftpCoupling : null;
+  if (singleFtp(s)) return { target, single: true, ratio: 1, outdoorNow: s.ftp, raceFtp: s.ftp, indoorTarget: target, progress: s.ftp / target, est: null };
   const est = outdoorFtpEstimate(acts, s);
-  if (s.outdoorPower && s.ftpOutdoor) c = { ratio: s.ftpOutdoor / s.ftp, outdoor: s.ftpOutdoor, indoor: s.ftp, source: 'power meter' };
-  else if (!c && est) c = { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: `${est.n} long ride${est.n > 1 ? 's' : ''}: ${est.z2kmh} km/h gradient-adjusted ≈ ${est.z2w} W zone-2 power = ${Math.round(est.pct * 100)}% of FTP` };
-  if (!c) return { target, est, ratio: null };
-  const outdoorNow = Math.round(s.ftp * c.ratio);
+  let c = null;
+  if (s.ftpDiscrepancy != null && s.ftpDiscrepancy !== '') c = { ratio: 1 + s.ftpDiscrepancy / 100, source: `your discrepancy setting (${s.ftpDiscrepancy > 0 ? '+' : ''}${s.ftpDiscrepancy} %)`, manual: true };
+  else if (s.outdoorPower && s.ftpOutdoor) c = { ratio: s.ftpOutdoor / s.ftp, outdoor: s.ftpOutdoor, indoor: s.ftp, source: 'power meter' };
+  else if (s.ftpCoupling?.source === 'your outdoor FTP') c = s.ftpCoupling;
+  else if (s.raceCal?.ratio) c = { ...s.raceCal, source: `outdoor ${s.raceCal.outdoor} W vs indoor ${s.raceCal.indoor} W on ${s.raceCal.date} (${est ? `${est.n} long ride${est.n > 1 ? 's' : ''}` : 'long rides'})` };
+  else if (est) c = { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()), source: `${est.n} long ride${est.n > 1 ? 's' : ''}: ${est.z2kmh} km/h gradient-adjusted ≈ ${est.z2w} W zone-2 power = ${Math.round(est.pct * 100)}% of FTP` };
+  if (!c) return { target, est, ratio: null, raceFtp: s.ftpOutdoor || s.ftp };
+  const raceFtp = Math.round(s.ftp * c.ratio);
   const indoorTarget = Math.round(target / c.ratio);
-  return { target, est, ratio: c.ratio, calib: c, outdoorNow, indoorTarget, progress: s.ftp / indoorTarget };
+  const outdoorEst = est ? est.ftp : (s.ftpOutdoor || null);
+  return { target, est, ratio: c.ratio, calib: c, raceFtp, outdoorNow: raceFtp, outdoorEst, indoorTarget, progress: s.ftp / indoorTarget, discrepancy: Math.round((c.ratio - 1) * 1000) / 10 };
+}
+// measured discrepancy, frozen until new long rides change the outdoor estimate
+export function raceCalibration(acts, s) {
+  if (singleFtp(s)) return null;
+  const est = outdoorFtpEstimate(acts, s);
+  if (!est) return s.raceCal || null;
+  if (s.raceCal && s.raceCal.outdoor === est.ftp) return s.raceCal;
+  return { ratio: clamp(est.ftp / s.ftp, 0.7, 1.6), outdoor: est.ftp, indoor: s.ftp, date: isoDate(new Date()) };
 }
 
 // ---- easy pace at Z2 HR (per run) ---------------------------------------------------

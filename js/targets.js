@@ -22,7 +22,7 @@ export function targets(s, acts) {
     easy: { target: 360, band: [330, 360] },                                   // 5:30–6:00/km
     runThreshold: { target: Math.round(360 * zf), band: [Math.round(330 * zf), Math.round(360 * zf)] },
     ftp: { target: it, band: [it, Math.round(it * 1.04)] },                     // indoor FTP for the outdoor race target
-    css: { target: 120, band: [112, 120] },                                    // 1:52–2:00/100m
+    css: { target: s.cssTarget || 120, band: [(s.cssTarget || 120) - 8, s.cssTarget || 120] },   // Settings → CSS target (default 2:00/100m)
   };
 }
 
@@ -46,6 +46,13 @@ export function computeBaseline(acts, s) {
       if (end > out.at) break;
       let v = null; try { v = est(end); } catch {}
       if (v) { out[k] = { value: Math.round(v), date: d0 }; break; }
+    }
+    // old rides have no second-by-second data cached → fall back to summary values
+    if (!out[k] && k === 'ftp') {
+      const early = acts.filter(f).filter(a => a.date <= isoDate(addDays(parseDate(d0), 42)) && a.eftp).map(a => a.eftp);
+      const firstLog = (s.thresholdLog || []).filter(l => l.field === 'ftp').map(l => ({ d: l.date, v: l.from })).sort((x, y) => x.d.localeCompare(y.d))[0];
+      if (early.length) out[k] = { value: Math.round(median(early)), date: d0, src: 'intervals.icu eFTP of your first rides' };
+      else if (firstLog?.v) out[k] = { value: Math.round(firstLog.v), date: firstLog.d, src: 'first FTP in your change history' };
     }
   }
   return out;

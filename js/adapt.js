@@ -64,7 +64,7 @@ export function analyse(settings, data) {
 
   // 1) reference plan + reconciliation
   const base = gen(undefined, { acts });
-  const r0 = reconcile(base, acts, moves, tIso);
+  const r0 = reconcile(base, acts, moves, tIso, settings.manualMatch || {});
 
   // 2) compliance (planned load vs done, past days only)
   const window = (days) => {
@@ -107,7 +107,7 @@ export function analyse(settings, data) {
   const currentWeek = weekForDate(base, tIso);
   if (customPlan) { factor = 1; intensityCap = null; reason = ''; focus.mult = { swim: 1, bike: 1, run: 1 }; }
   const plan = gen({ factor, fromWeek: currentWeek ? currentWeek.index : 0, intensityCap }, { acts, focus: focus.mult });
-  const { matches, extras } = reconcile(plan, acts, moves, tIso);
+  const { matches, extras } = reconcile(plan, acts, moves, tIso, settings.manualMatch || {});
   // 4) catch-up for missed sessions
   const caught = catchUp(plan, matches, tIso, settings);
 

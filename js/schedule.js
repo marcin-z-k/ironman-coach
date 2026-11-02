@@ -11,7 +11,43 @@ import { scaleVolume } from './workouts.js';
 const sportOf = x => x.sport === 'brick' ? 'run' : x.sport;
 const MIN_SESSION_SEC = 900;
 
-export function reconcile(plan, acts, moves = {}, todayIso) {
+// ---- intensity class (for matching) -----------------------------------------------------------
+// activity: 'hard'  = intervals detected (intervals.icu interval summary like "3x 6m", or a workout name
+//                     like "4x8", "intervals", "threshold", "VO2", "sweet spot", "tempo") or IF ≥ 0.85
+//           'easy'  = IF < 0.75 and no intervals
+//           'mid'   = otherwise / unknown
+// planned:  'hard'  = intervals, power, CSS, hills, tempo sessions or planned IF ≥ 0.82
+//           'easy'  = easy, endurance, technique, drills, long, walk or planned IF < 0.72
+const HARD_NAME = /(\d+\s?[x×]\s?\d)|interval|threshold|vo2|sweet ?spot|tempo|fartlek|over.?under|css|hill rep/i;
+export function actClass(a) {
+  const iv = (a.intervalSummary || []).some(t => /^\s*\d+\s?x/i.test(t));
+  const IF = a.intensity ? a.intensity / 100 : null;
+  if (iv || HARD_NAME.test(a.name || '') || (IF && IF >= 0.85)) return 'hard';
+  if (IF && IF < 0.75) return 'easy';
+  return 'mid';
+}
+export function sessClass(x) {
+  if (['intervals', 'power', 'css', 'hills', 'tempo'].includes(x.kind) || (x.if && x.if >= 0.82)) return 'hard';
+  if (['easy', 'endurance', 'technique', 'drill', 'long', 'walk'].includes(x.kind) || (x.if && x.if < 0.72)) return 'easy';
+  return 'mid';
+}
+const CLASS_COST = { 'hard|easy': 3, 'easy|hard': 3, 'hard|mid': 0.8, 'mid|hard': 0.8, 'easy|mid': 0.4, 'mid|easy': 0.4 };
+
+// score of matching activity a to planned session x (lower = better):
+//   day distance (early 1 + |d|, late d + 0.01, same day 0)
+// + duration mismatch  |planned − done| / 15 min
+// + distance mismatch  2 · |done/planned − 1|  (when the session has a planned distance), max 2
+// + intensity mismatch hard↔easy 3 · hard↔mid 0.8 · easy↔mid 0.4
+export function matchScore(a, x) {
+  const dd = daysBetween(a.date, x.date);
+  let sc = (dd === 0 ? 0 : dd > 0 ? dd + 0.01 : 1 + Math.abs(dd)) + Math.abs(x.min - a.movingSec / 60) / 15;
+  const pd = x.dist || x.distM || null;
+  if (pd && a.distanceM) sc += Math.min(2, 2 * Math.abs(a.distanceM / (pd > 100 ? pd : pd * 1000) - 1));
+  sc += CLASS_COST[actClass(a) + '|' + sessClass(x)] || 0;
+  return sc;
+}
+
+export function reconcile(plan, acts, moves = {}, todayIso, manual = {}) {
   const matches = {}; const extras = []; const used = new Set();
   for (const w of plan.weeks) {
     // 1) manual swaps
@@ -23,14 +59,24 @@ export function reconcile(plan, acts, moves = {}, todayIso) {
     const wActs = acts
       .filter(a => a.date >= w.start && a.date <= w.end && a.date <= todayIso && ['swim', 'bike', 'run'].includes(a.sport))
       .sort((a, b) => a.start.localeCompare(b.start));
+    // 2) your manual assignments (activity view → "Counts for")
+    for (const a of wActs) {
+      const sid = manual[a.id];
+      if (sid === undefined) continue;
+      used.add(a.id);
+      if (sid === 'none') { extras.push(a); continue; }
+      const S = w.sessions.find(x => x.id === sid && !matches[x.id]);
+      if (!S) { used.delete(a.id); continue; }
+      matches[S.id] = a; S.manualMatch = true;
+      if (S.date !== a.date) { S.movedFrom = S.date; S.date = a.date; S.auto = true; }
+    }
     for (const a of wActs) {
       if (used.has(a.id)) continue;
       const dur = a.movingSec / 60;
       const open = w.sessions.filter(x => !matches[x.id] && x.kind !== 'race' && sportOf(x) === a.sport);
       if (!open.length || (a.movingSec < MIN_SESSION_SEC && !open.some(x => x.date === a.date))) { extras.push(a); continue; }
       // one score for all candidates: day distance (doing it late costs a bit more) + duration mismatch
-      const score = x => { const dd = daysBetween(a.date, x.date); return (dd === 0 ? 0 : dd > 0 ? dd + 0.01 : 1 + Math.abs(dd)) + Math.abs(x.min - dur) / 15; };
-      const S = open.sort((x, y) => score(x) - score(y))[0];
+      const S = open.sort((x, y) => matchScore(a, x) - matchScore(a, y))[0];
       const D1 = S.date, D2 = a.date;
       matches[S.id] = a; used.add(a.id);
       if (D1 === D2) continue;
@@ -38,7 +84,7 @@ export function reconcile(plan, acts, moves = {}, todayIso) {
       if (D1 > D2) {
         // done early → whatever was planned on D2 (and not done) takes the vacated day
         for (const y of w.sessions) {
-          if (y !== S && !matches[y.id] && y.date === D2 && sportOf(y) !== a.sport && y.kind !== 'race') {
+          if (y !== S && !matches[y.id] && y.date === D2 && y.kind !== 'race' && !y.auto) {
             y.movedFrom = D2; y.date = D1; y.auto = true; y.swapWith = S.title;
           }
         }

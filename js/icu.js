@@ -102,6 +102,7 @@ export function normalizeActivity(a) {
     avgSpeed: a.average_speed ?? (moving ? dist / moving : null), // m/s
     elev: a.total_elevation_gain ?? null,
     rpe: a.icu_rpe ?? null,
+    intervalSummary: Array.isArray(a.interval_summary) ? a.interval_summary : null,   // e.g. ['3x 6m 140w']
     feel: a.feel ?? null,
     ftp: a.icu_ftp ?? null,
     eftp: (a.icu_eftp ?? a.eftp) != null ? Math.round(a.icu_eftp ?? a.eftp) : null,
